@@ -51,10 +51,23 @@ func NewPodMutator(c client.Client) admission.Handler {
 
 func (m *podMutator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	logger := ctrl.LoggerFrom(ctx).WithName("podMutator").WithName("Handle")
+	if req.DryRun != nil && *req.DryRun {
+		// DryRunの場合、サイドカーコンテナとして扱う
+		return admission.Allowed("It' sidecar container.")
+	}
+
 	pod := &corev1.Pod{}
 	if err := m.decoder.Decode(req, pod); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
+	// podマニフェストの中身を確認
+	marshaledPod, err := json.MarshalIndent(pod, "", "  ")
+	if err != nil {
+		fmt.Println("error")
+	}
+	// fmt.Printf("%s\n", pod)
+	// fmt.Println("----------")
+	fmt.Printf("%s\n", marshaledPod)
 	if len(pod.Spec.Containers) == 0 {
 		return admission.Denied("pod has no containers")
 	}
@@ -62,8 +75,18 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	if n, ok := pod.Labels[constants.PodLabelFluentPVCName]; !ok {
 		return admission.Denied(fmt.Sprintf("pod does not have %s label.", constants.PodLabelFluentPVCName))
 	} else {
-		if err := m.Get(ctx, client.ObjectKey{Name: n}, fpvc); err != nil {
-			return admission.Errored(http.StatusInternalServerError, err)
+		marshaledReq, err := json.MarshalIndent(req, "", "  ")
+		if err != nil {
+			fmt.Println("error")
+		}
+		fmt.Printf("%s", marshaledReq)
+		if req.DryRun != nil && *req.DryRun {
+			// Nothing to do
+		} else {
+			// DryRunでない場合、FluentPVCが存在するか確認する
+			if err := m.Get(ctx, client.ObjectKey{Name: n}, fpvc); err != nil {
+				return admission.Errored(http.StatusInternalServerError, err)
+			}
 		}
 	}
 

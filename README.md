@@ -173,7 +173,7 @@ Use [kind](https://kind.sigs.k8s.io/) to create local Kubernetes clusters.
 ### Create a Kubernetes Cluster for development
 
 ```sh
-$ kind create cluster
+$ make kind-create-cluster
 $ make cert-manager
 ```
 

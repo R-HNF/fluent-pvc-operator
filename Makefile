@@ -4,6 +4,8 @@ IMG ?= fluent-pvc-operator:development
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true,preserveUnknownFields=false,maxDescLen=0,generateEmbeddedObjectMeta=true"
 
+ARCH=arm64
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 	GOBIN=$(shell go env GOPATH)/bin
@@ -52,10 +54,12 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
+# KUBEBUILDER_CONTROLPLANE_START_TIMEOUT="5s"
+# KUBEBUILDER_CONTROLPLANE_STOP_TIMEOUT="5s"
 test: manifests generate fmt vet ## Run tests.
 	mkdir -p ${ENVTEST_ASSETS_DIR}
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.7.2/hack/setup-envtest.sh
-	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test $(shell go list ./... | grep -v /e2e) -coverprofile cover.out
 
 ##@ Build
 
@@ -73,33 +77,33 @@ docker-push: ## Push docker image with the manager.
 
 ##@ Deployment
 
-install: manifests bin/kustomize bin/kubectl ## Install CRDs into the k8s cluster specified in ~/.kube/config.
+install: manifests bin/kustomize ## Install CRDs into the k8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl apply -f -
 
-uninstall: manifests bin/kustomize bin/kubectl ## Uninstall CRDs from the k8s cluster specified in ~/.kube/config.
+uninstall: manifests bin/kustomize ## Uninstall CRDs from the k8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl delete -f -
 
-deploy: manifests bin/kustomize bin/kubectl ## Deploy controller to the k8s cluster specified in ~/.kube/config.
+deploy: manifests bin/kustomize ## Deploy controller to the k8s cluster specified in ~/.kube/config.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default | kubectl apply -f -
 
-undeploy: bin/kubectl ## Undeploy controller from the k8s cluster specified in ~/.kube/config.
+undeploy: ## Undeploy controller from the k8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/default | kubectl delete -f -
 
 AIO_FILE=$(shell pwd)/deploy/fluent-pvc-operator-aio.yaml
-aio: manifests bin/kustomize bin/kubectl ## Build a file which all manifest in one.
+aio: manifests bin/kustomize ## Build a file which all manifest in one.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default > ${AIO_FILE}
 
 KUBECTL_WAIT_TIMEOUT ?= 300s
 FLUENT_PVC_NAMESPACE = fluent-pvc-operator-system
 fluent-pvc-operator: deploy ## Deploy fluent-pvc-operator into the k8s cluster specified in ~/.kube/config && Wait until it becomes available.
-	$(KUBECTL) wait -n $(FLUENT_PVC_NAMESPACE) --for=condition=Available deployments --all --timeout=$(KUBECTL_WAIT_TIMEOUT)
+	kubectl wait -n $(FLUENT_PVC_NAMESPACE) --for=condition=Available deployments --all --timeout=$(KUBECTL_WAIT_TIMEOUT)
 
 CERT_MANAGER_VERSION = 1.3.1
-cert-manager: bin/kubectl ## Deploy cert-manager into the k8s cluster specified in ~/.kube/config && Wait until it becomes available.
-	$(KUBECTL) apply -f https://github.com/jetstack/cert-manager/releases/download/v$(CERT_MANAGER_VERSION)/cert-manager.yaml
-	$(KUBECTL) wait -n cert-manager --for=condition=Available deployments --all --timeout=$(KUBECTL_WAIT_TIMEOUT)
+cert-manager: ## Deploy cert-manager into the k8s cluster specified in ~/.kube/config && Wait until it becomes available.
+	kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v$(CERT_MANAGER_VERSION)/cert-manager.yaml
+	kubectl wait -n cert-manager --for=condition=Available deployments --all --timeout=$(KUBECTL_WAIT_TIMEOUT)
 
 ##@ Install Development Tools
 
@@ -125,21 +129,26 @@ KUSTOMIZE = $(shell pwd)/bin/kustomize
 bin/kustomize: ## Download kustomize locally if necessary.
 	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
 
-KIND = $(shell pwd)/bin/kind
-bin/kind: ## Download kind locally if necessary.
-	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+# KIND = $(shell pwd)/bin/kind
+# bin/kind: ## Download kind locally if necessary.
+# 	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
 GINKGO = $(shell pwd)/bin/ginkgo
 bin/ginkgo: ## Download ginkgo locally if necessary.
 	$(call go-get-tool,$(GINKGO),github.com/onsi/ginkgo/ginkgo@v1.16.4)
 
-KUBECTL = $(shell pwd)/bin/kubectl
-bin/kubectl: ## Download kubectl locally if necessary.
-	curl --create-dirs -o $(KUBECTL) -sfL https://storage.googleapis.com/kubernetes-release/release/$(shell curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/$(shell uname -s | awk '{print tolower($$0)}')/amd64/kubectl
-	chmod a+x $(KUBECTL)
+# KUBECTL = $(shell pwd)/bin/kubectl
+# bin/kubectl: ## Download kubectl locally if necessary.
+# 	curl --create-dirs -o $(KUBECTL) -LO "https://dl.k8s.io/release/1.20.7/bin/linux/${ARCH}/kubectl" && chmod +x $(KUBECTL)
+
+# ENVTEST = $(shell pwd)/bin/setup-envtest
+# setup-envtest: ## Download setup-envtest
+# 	$(call go-get-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
 
 ##@ Kind Cluster Management
 KIND_CLUSTER_NAME ?= fluent-pvc-operator
+KIND_CLUSTER_CONFIG_DIR=$(shell pwd)/config/kind
+KIND_KUBECONFIG_BACKUP_DIR=$(shell pwd)/.kube
 TEST_KUBERNETES_VERSION ?= 1.20
 ifeq ($(TEST_KUBERNETES_VERSION),1.20)
 	KUBERNETES_VERSION := 1.20.7
@@ -148,21 +157,31 @@ else ifeq ($(TEST_KUBERNETES_VERSION),1.19)
 else ifeq ($(TEST_KUBERNETES_VERSION),1.18)
 	KUBERNETES_VERSION := 1.18.19
 endif
-kind-create-cluster: bin/kind kind-delete-cluster ## Launch a k8s cluster by kind.
-	$(KIND) create cluster --name=$(KIND_CLUSTER_NAME) --image kindest/node:v$(KUBERNETES_VERSION)
+kind-create-cluster: ## Launch a k8s cluster by kind.
+ifeq (1, $(shell kind get clusters | grep ${KIND_CLUSTER_NAME} | wc -l | tr -d ' '))
+	@echo "Cluster already exists"
+else
+	@echo "Creating cluster "${KIND_CLUSTER_NAME}" ..."
+	kind create cluster --name=$(KIND_CLUSTER_NAME) --image kindest/node:v$(KUBERNETES_VERSION) --config ${KIND_CLUSTER_CONFIG_DIR}/cluster.yaml
+endif
+ifeq ($(IN_DEV_CONTAINER), true)
+	mkdir -p ${HOME}/.kube/
+	kind get kubeconfig --name $(KIND_CLUSTER_NAME) > ${HOME}/.kube/config
+	sed -i -E '/server: /s/https:\/\/[0-9.:]+/https:\/\/${KIND_CLUSTER_NAME}-control-plane:6443/' ${HOME}/.kube/config
+endif
 
-kind-delete-cluster: bin/kind ## Shutdown the k8s cluster by kind.
-	$(KIND) delete cluster --name=$(KIND_CLUSTER_NAME) || true
+kind-delete-cluster: ## Shutdown the k8s cluster by kind.
+	kind delete cluster --name=$(KIND_CLUSTER_NAME) || true
 
 kind-load-image-fluent-pvc-operator: ## Load the fluent-pvc-operator docker image into the k8s cluster launched by kind.
 	$(MAKE) .kind-load-image-$(IMG)
 
-.kind-load-image-%: bin/kind # NOTE: A hidden utility target to load docker images into the k8s cluster launched by kind.
-	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) ${@:.kind-load-image-%=%}
+.kind-load-image-%: # NOTE: A hidden utility target to load docker images into the k8s cluster launched by kind.
+	kind load docker-image --name $(KIND_CLUSTER_NAME) ${@:.kind-load-image-%=%}
 
 ##@ E2E Test
 e2e/setup: cert-manager docker-build kind-load-image-fluent-pvc-operator fluent-pvc-operator ## Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
-e2e/clean-setup: kind-create-cluster e2e/setup ## Re-create the k8s cluster && Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
+e2e/clean-setup: kind-delete-cluster kind-create-cluster e2e/setup ## Re-create the k8s cluster && Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
 e2e/test: bin/ginkgo ## Run the e2e tests in the k8s cluster specified in ~/.kube/config.
 	$(GINKGO) -nodes 8 -p -race -failFast -progress -trace -randomizeAllSpecs -slowSpecThreshold 120 -coverprofile cover-e2e.out ./e2e
 e2e/test-backup: bin/ginkgo ## Run the e2e tests in the k8s cluster specified in ~/.kube/config.
