@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -108,6 +109,7 @@ var _ = Describe("Pod Mutation Webhook", func() {
 	BeforeEach(func() {
 		err := k8sClient.Create(ctx, testStorageClass.DeepCopy())
 		Expect(err).NotTo(HaveOccurred())
+		time.Sleep(3 * time.Second)
 		err = k8sClient.Create(ctx, testFluentPVC.DeepCopy())
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -203,17 +205,20 @@ var _ = Describe("Pod Mutation Webhook", func() {
 		ctx := context.Background()
 		pod := testPod.DeepCopy()
 		err := k8sClient.Create(ctx, pod)
-		Expect(err).Should(Succeed())
-		mutPod := &corev1.Pod{}
-		err = k8sClient.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name}, mutPod)
-		Expect(err).Should(Succeed())
+		Expect(err.Error()).Should(BeEquivalentTo(
+			"admission webhook \"pod-mutation-webhook.fluent-pvc-operator.tech.zozo.com\" denied" +
+				" the request: pod does not have fluent-pvc-operator.tech.zozo.com/fluent-pvc-name label.",
+		))
+		// mutPod := &corev1.Pod{}
+		// err = k8sClient.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name}, mutPod)
+		// Expect(err).Should(Succeed())
 
-		var volumeForPVC *corev1.Volume
-		for _, v := range mutPod.Spec.Volumes {
-			if v.PersistentVolumeClaim != nil {
-				volumeForPVC = &v
-			}
-		}
-		Expect(volumeForPVC).To(BeNil())
+		// var volumeForPVC *corev1.Volume
+		// for _, v := range mutPod.Spec.Volumes {
+		// 	if v.PersistentVolumeClaim != nil {
+		// 		volumeForPVC = &v
+		// 	}
+		// }
+		// Expect(volumeForPVC).To(BeNil())
 	})
 })

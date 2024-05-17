@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -84,6 +85,7 @@ var _ = Describe("FluentPVC Validation Webhook", func() {
 	BeforeEach(func() {
 		err := k8sClient.Create(ctx, testStorageClass.DeepCopy())
 		Expect(err).NotTo(HaveOccurred())
+		time.Sleep(3 * time.Second)
 	})
 	AfterEach(func() {
 		err := k8sClient.Delete(ctx, testStorageClass)
