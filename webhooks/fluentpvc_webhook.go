@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	fluentpvcv1alpha1 "github.com/st-tech/fluent-pvc-operator/api/v1alpha1"
+	"github.com/st-tech/fluent-pvc-operator/constants"
 	podutils "github.com/st-tech/fluent-pvc-operator/utils/pod"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -83,6 +84,7 @@ func (v *FluentPVCValidator) Handle(ctx context.Context, req admission.Request) 
 	pod := &corev1.Pod{}
 	pod.SetName(fpvc.Name)
 	pod.SetNamespace(corev1.NamespaceDefault)
+	pod.SetLabels(map[string]string{constants.PodLabelFluentPVCName: fpvc.Name})
 	pod.Spec.Containers = append(pod.Spec.Containers, *fpvc.Spec.SidecarContainerTemplate.DeepCopy())
 
 	if err := v.Client.Create(ctx, pod, client.DryRunAll); err != nil {
