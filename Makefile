@@ -153,6 +153,13 @@ kind-create-cluster: ## Launch a k8s cluster by kind.
 		echo "Creating cluster "${KIND_CLUSTER_NAME}" ..."; \
 		kind create cluster --name=$(KIND_CLUSTER_NAME) --image kindest/node:v$(KUBERNETES_VERSION) --config ${KIND_CLUSTER_CONFIG_DIR}/cluster.yaml; \
 	fi
+	@if [[ "${IN_DEV_CONTAINER}" = "true" ]]; then \
+		echo "Setting up kubeconfig in the dev container for the cluster ..."; \
+		mkdir -p ${HOME}/.kube/; \
+		kind get kubeconfig --name $(KIND_CLUSTER_NAME) > ${HOME}/.kube/config; \
+		sed -i -E '/server: /s/https:\/\/[0-9.:]+/https:\/\/${KIND_CLUSTER_NAME}-control-plane:6443/' ${HOME}/.kube/config; \
+	fi
+
 kind-delete-cluster: ## Shutdown the k8s cluster by kind.
 	kind delete cluster --name=$(KIND_CLUSTER_NAME) || true
 
