@@ -74,17 +74,17 @@ docker-push: ## Push docker image with the manager.
 ##@ Deployment
 
 install: manifests bin/kustomize bin/kubectl ## Install CRDs into the k8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | kubectl apply -f -
+	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
 
 uninstall: manifests bin/kustomize bin/kubectl ## Uninstall CRDs from the k8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | kubectl delete -f -
+	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete -f -
 
 deploy: manifests bin/kustomize bin/kubectl ## Deploy controller to the k8s cluster specified in ~/.kube/config.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | kubectl apply -f -
+	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
 undeploy: bin/kubectl ## Undeploy controller from the k8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/default | kubectl delete -f -
+	$(KUSTOMIZE) build config/default | $(KUBECTL) delete -f -
 
 AIO_FILE=$(shell pwd)/deploy/fluent-pvc-operator-aio.yaml
 aio: manifests bin/kustomize bin/kubectl ## Build a file which all manifest in one.
@@ -103,43 +103,41 @@ cert-manager: bin/kubectl ## Deploy cert-manager into the k8s cluster specified 
 
 ##@ Install Development Tools
 
-# go-get-tool will 'go get' any package $2 and install it to $1.
+# go-install-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-define go-get-tool
+define go-install-tool
 	@[ -f $(1) ] || { \
 		set -e ;\
 		TMP_DIR=$$(mktemp -d) ;\
 		cd $$TMP_DIR ;\
 		go mod init tmp ;\
 		echo "Downloading $(2)" ;\
-		GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
+		GOBIN=$(PROJECT_DIR)/bin go install $(2) || GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
 		rm -rf $$TMP_DIR ;\
 	}
 endef
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 bin/controller-gen: ## Download controller-gen locally if necessary.
-	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2)
 
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 bin/kustomize: ## Download kustomize locally if necessary.
-	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
-
-KIND = $(shell pwd)/bin/kind
-bin/kind: ## Download kind locally if necessary.
-	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
 
 GINKGO = $(shell pwd)/bin/ginkgo
 bin/ginkgo: ## Download ginkgo locally if necessary.
-	$(call go-get-tool,$(GINKGO),github.com/onsi/ginkgo/ginkgo@v1.16.4)
+	$(call go-install-tool,$(GINKGO),github.com/onsi/ginkgo/ginkgo@v1.16.4)
 
 KUBECTL = $(shell pwd)/bin/kubectl
+ARCH := arm64
 bin/kubectl: ## Download kubectl locally if necessary.
-	curl --create-dirs -o $(KUBECTL) -sfL https://storage.googleapis.com/kubernetes-release/release/$(shell curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/$(shell uname -s | awk '{print tolower($$0)}')/amd64/kubectl
+	curl --create-dirs -o $(KUBECTL) -sfL https://storage.googleapis.com/kubernetes-release/release/$(shell curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/$(shell uname -s | awk '{print tolower($$0)}')/${ARCH}/kubectl
 	chmod a+x $(KUBECTL)
 
 ##@ Kind Cluster Management
 KIND_CLUSTER_NAME ?= fluent-pvc-operator
+KIND_CLUSTER_CONFIG_DIR=$(shell pwd)/config/kind
 TEST_KUBERNETES_VERSION ?= 1.20
 ifeq ($(TEST_KUBERNETES_VERSION),1.20)
 	KUBERNETES_VERSION := 1.20.7
@@ -148,21 +146,25 @@ else ifeq ($(TEST_KUBERNETES_VERSION),1.19)
 else ifeq ($(TEST_KUBERNETES_VERSION),1.18)
 	KUBERNETES_VERSION := 1.18.19
 endif
-kind-create-cluster: bin/kind kind-delete-cluster ## Launch a k8s cluster by kind.
-	$(KIND) create cluster --name=$(KIND_CLUSTER_NAME) --image kindest/node:v$(KUBERNETES_VERSION)
-
-kind-delete-cluster: bin/kind ## Shutdown the k8s cluster by kind.
-	$(KIND) delete cluster --name=$(KIND_CLUSTER_NAME) || true
+kind-create-cluster: ## Launch a k8s cluster by kind.
+	@if [[ $$(kind get clusters | grep ${KIND_CLUSTER_NAME} | wc -l | tr -d ' ') -eq 1 ]]; then \
+		echo "Cluster already exists"; \
+	else \
+		echo "Creating cluster "${KIND_CLUSTER_NAME}" ..."; \
+		kind create cluster --name=$(KIND_CLUSTER_NAME) --image kindest/node:v$(KUBERNETES_VERSION) --config ${KIND_CLUSTER_CONFIG_DIR}/cluster.yaml; \
+	fi
+kind-delete-cluster: ## Shutdown the k8s cluster by kind.
+	kind delete cluster --name=$(KIND_CLUSTER_NAME) || true
 
 kind-load-image-fluent-pvc-operator: ## Load the fluent-pvc-operator docker image into the k8s cluster launched by kind.
 	$(MAKE) .kind-load-image-$(IMG)
 
-.kind-load-image-%: bin/kind # NOTE: A hidden utility target to load docker images into the k8s cluster launched by kind.
-	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) ${@:.kind-load-image-%=%}
+.kind-load-image-%: # NOTE: A hidden utility target to load docker images into the k8s cluster launched by kind.
+	kind load docker-image --name $(KIND_CLUSTER_NAME) ${@:.kind-load-image-%=%}
 
 ##@ E2E Test
 e2e/setup: cert-manager docker-build kind-load-image-fluent-pvc-operator fluent-pvc-operator ## Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
-e2e/clean-setup: kind-create-cluster e2e/setup ## Re-create the k8s cluster && Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
+e2e/clean-setup: kind-delete-cluster kind-create-cluster e2e/setup ## Re-create the k8s cluster && Setup the k8s cluster specified in ~/.kube/config for the e2e tests.
 e2e/test: bin/ginkgo ## Run the e2e tests in the k8s cluster specified in ~/.kube/config.
 	$(GINKGO) -nodes 8 -p -race -failFast -progress -trace -randomizeAllSpecs -slowSpecThreshold 120 -coverprofile cover-e2e.out ./e2e
 e2e/test-backup: bin/ginkgo ## Run the e2e tests in the k8s cluster specified in ~/.kube/config.
@@ -186,12 +188,12 @@ examples/log-collection/clean-deploy: e2e/clean-setup examples/log-collection/bu
 
 examples/log-collection/deploy: ## Deploy the log collection example to the k8s cluster specified in ~/.kube/config.
 	touch $(EXAMPLE_LOG_COLLECTION_DIR)/manifests/fluentd/credential.json
-	$(KUSTOMIZE) build $(EXAMPLE_LOG_COLLECTION_DIR)/manifests | kubectl apply -f -
+	$(KUSTOMIZE) build $(EXAMPLE_LOG_COLLECTION_DIR)/manifests | $(KUBECTL) apply -f -
 
 examples/log-collection/undeploy: ## Undeploy the log collection example from the k8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build $(EXAMPLE_LOG_COLLECTION_DIR)/manifests | kubectl delete -f -
+	$(KUSTOMIZE) build $(EXAMPLE_LOG_COLLECTION_DIR)/manifests | $(KUBECTL) delete -f -
 
 examples/log-collection/show-pubsub-subscription: ## Show fluentd-published logs by subscription.
-	kubectl get po -l app=gcloud-pubsub-emulator -o json \
+	$(KUBECTL) get po -l app=gcloud-pubsub-emulator -o json \
 		| jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' \
-		| xargs -I%% kubectl exec %% -- ./subscription.sh
+		| xargs -I%% $(KUBECTL) exec %% -- ./subscription.sh
