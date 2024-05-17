@@ -173,7 +173,7 @@ Use [kind](https://kind.sigs.k8s.io/) to create local Kubernetes clusters.
 ### Create a Kubernetes Cluster for development
 
 ```sh
-$ kind create cluster
+$ make kind-create-cluster
 $ make cert-manager
 ```
 
@@ -198,21 +198,21 @@ $ make fluent-pvc-operator
 ### Watch the behaviors
 
 ```sh
-$ kubectl apply -f config/samples/fluent-pvc-operator_v1alpha1_fluentpvc.yaml
-$ kubectl run --image=alpine:latest --labels fluent-pvc-operator.tech.zozo.com/fluent-pvc-name=fluent-pvc-sample sample-pod -- sh -c 'for i in $(seq 1 60); do sleep 1; echo $i; done'
+$ bin/kubectl apply -f config/samples/fluent-pvc-operator_v1alpha1_fluentpvc.yaml
+$ bin/kubectl run --image=alpine:latest --labels fluent-pvc-operator.tech.zozo.com/fluent-pvc-name=fluent-pvc-sample sample-pod -- sh -c 'for i in $(seq 1 60); do sleep 1; echo $i; done'
 
 ## You can watch the status changes by the following command.
 $ watch -n1 "
 echo '=======FluentPVC======='
-kubectl get fluentpvc
+bin/kubectl get fluentpvc
 echo '=======FluentPVCBinding======='
-kubectl get fluentpvcbinding
+bin/kubectl get fluentpvcbinding
 echo '=======PVC======='
-kubectl get pvc
+bin/kubectl get pvc
 echo '=======Job======='
-kubectl get job
+bin/kubectl get job
 echo '=======Pod======='
-kubectl get pod
+bin/kubectl get pod
 echo '=============='
 "
 ```
