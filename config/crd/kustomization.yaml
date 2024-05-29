@@ -6,6 +6,7 @@ resources:
 - bases/fluent-pvc-operator.tech.zozo.com_fluentpvcbindings.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
+# なくても動くWebhook設定
 patchesStrategicMerge:
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
 # patches here are for enabling the conversion webhook for each CRD

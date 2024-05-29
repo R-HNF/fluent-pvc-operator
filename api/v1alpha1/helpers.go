@@ -1,3 +1,5 @@
+// FluentPVCBinding構造体にヘルパー関数を足している
+
 package v1alpha1
 
 import (
