@@ -73,9 +73,10 @@ spec:
 |pvcVolumeName|string|true||Name of [Volume](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#Volume) to use PVCs for Pods. Must be a [DNS_LABEL](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names) and unique within the Pod.|
 |pvcVolumeMountPath|string|true||Path to mount containers as a [VolumeMount](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1).Must not contain ':'.|
 |sidecarContainerTemplate|[Container](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container)|true||Template for Sidecar Container injected into Pods.|
-|commonEnvs|[][EnvVar](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables)|false|`[]`|Common Environment Variables for all containers|
-|commonVolumes|[][Volume](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#Volume)|false|`[]`|Common [Volume](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#Volume)s for all Pods|
-|commonVolumeMounts|[][VolumeMount](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1)|false|`[]`|Common [VolumeMount](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1)s for all containers|
+|---|---|---|---|---|
+|commonEnvs|[][EnvVar](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables)|false|`[]`|Common Environment Variables for all containers（例：fluentdの設定用環境変数）|
+|commonVolumes|[][Volume](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#Volume)|false|`[]`|Common [Volume](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#Volume)s for all Pods（例：Google Cloudの認証情報マウント用）|
+|commonVolumeMounts|[][VolumeMount](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1)|false|`[]`|Common [VolumeMount](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1)s for all containers（例：Google Cloudの認証情報マウント用）|
 |deletePodIfSidecarContainerTerminationDetected|boolean|false|`true`|Flag to delete Pods when the injected sidecar container termination is detected.|
 
 sample
