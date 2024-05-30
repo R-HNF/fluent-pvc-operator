@@ -30,9 +30,9 @@ spec:
                 - $(PUBSUB_EMULATOR_TOPIC)
                 - '--subscription'
                 - test-sub
-            initialDelaySeconds: 1
-            periodSeconds: 1
-            timeoutSeconds: 1
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 150
           env:
