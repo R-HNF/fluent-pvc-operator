@@ -1,5 +1,5 @@
 # ref. https://hub.docker.com/r/fluent/fluentd/
-FROM fluent/fluentd:v1.12.1-debian-1.0
+FROM fluent/fluentd:v1.12.1-debian-arm64-1.0
 
 # ref. https://github.com/fluent/fluentd-kubernetes-daemonset/blob/ea92038/docker-image/v1.12/debian-s3/Dockerfile
 USER root
@@ -13,7 +13,7 @@ ENV FLUENTD_DISABLE_BUNDLER_INJECTION 1
 # ref. https://github.com/fluent/fluentd-docker-image/blob/4e08108/v1.12/debian/Dockerfile#L38-L41
 ENV JEMALLOC_VERSION 5.2.1
 
-COPY Gemfile* /fluentd/
+COPY Gemfile /fluentd/
 RUN buildDeps="sudo make gcc g++ libc-dev libffi-dev wget bzip2" \
 	runtimeDeps="curl" \
 	&& apt-get update \

@@ -1,11 +1,11 @@
-FROM golang:alpine as builder
+FROM --platform=linux/amd64 golang:alpine as builder
 WORKDIR /work
 COPY ./main.go ./
 COPY ./go.mod ./
 COPY ./go.sum ./
 RUN go build -o pubsub-create .
 
-FROM gcr.io/google.com/cloudsdktool/cloud-sdk:alpine
+FROM --platform=linux/amd64 gcr.io/google.com/cloudsdktool/cloud-sdk:alpine
 COPY --from=builder /work/pubsub-create /usr/bin/
 COPY ./subscription.sh /subscription.sh
 RUN apk add --no-cache tini openjdk8-jre \
