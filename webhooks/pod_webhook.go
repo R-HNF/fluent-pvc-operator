@@ -58,17 +58,18 @@ func NewPodMutator(c client.Client) admission.Handler {
 func (m *podMutator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	logger := ctrl.LoggerFrom(ctx).WithName("podMutator").WithName("Handle")
 
+	// リクエストをオブジェクトに変換
 	pod := &corev1.Pod{}
 	if err := m.decoder.Decode(req, pod); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	// DryRunの場合、サイドカーコンテナとして扱う（テストが通らないため、このような処理をここに入れている）
 	if req.DryRun != nil && *req.DryRun {
-		// DryRunの場合、サイドカーコンテナとして扱う
 		return admission.Allowed("It' sidecar container.")
 	}
 
-	// podマニフェストの中身を確認
+	// debug: podマニフェストの中身を確認
 	marshaledPod, err := json.MarshalIndent(pod, "", "  ")
 	if err != nil {
 		fmt.Println("error")
@@ -78,12 +79,19 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 		return admission.Denied("pod has no containers")
 	}
 
-	// FluentPVCBinding を作成する。
+	// FluentPVCBinding オブジェクト作成
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
-	if fpnvName, ok := pod.Labels[constants.PodLabelFluentPVCName]; !ok {
+	// pod annotationの特定キーの値を確認
+	// annotation で fluent-pvc-operator.tech.zozo.com/fluent-pvc-name: hogehoge が定義されている Pod を処理対象とする
+	if fpvcName, err := pod.Labels[constants.PodLabelFluentPVCName]; err {
+		// pod annotationに特定キーが存在しない場合、エラーを返す
+		// admission.Deniedで返す必要ある?
+		// fluent-pvc-operator.tech.zozo.com/fluent-pvc-name の value で指定された FluentPVC が定義されていない場合エラーとする
 		return admission.Denied(fmt.Sprintf("pod does not have %s label.", constants.PodLabelFluentPVCName))
 	} else {
-		// リクエストの中身を確認
+		// pod annotationに特定キーが存在する場合、FluentPVC オブジェクトを取得する
+
+		// debug:リクエストの中身を確認
 		marshaledReq, err := json.MarshalIndent(req, "", "  ")
 		if err != nil {
 			fmt.Println("error")
@@ -91,10 +99,11 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 		fmt.Printf("%s", marshaledReq)
 
 		if req.DryRun != nil && *req.DryRun {
+			// DryRunの場合、何もしない
 			// Nothing to do
 		} else {
-			// DryRunでない場合、FluentPVCが存在するか確認する
-			if err := m.Get(ctx, client.ObjectKey{Name: fpnvName}, fpvc); err != nil {
+			// DryRunでない場合、FluentPVC オブジェクトを取得する
+			if err := m.Get(ctx, client.ObjectKey{Name: fpvcName}, fpvc); err != nil {
 				return admission.Errored(http.StatusInternalServerError, err)
 			}
 		}
@@ -102,44 +111,60 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 
 	// TODO: Consider too long fluent-pvc name
 	collisionCount := int32(rand.IntnRange(math.MinInt32, math.MaxInt32)) // Using the count for collision avoidance
-	name := fmt.Sprintf(
+	fpvcbName := fmt.Sprintf(
 		"%s-%s-%s",
 		fpvc.Name, hashutils.ComputeHash(fpvc, nil), hashutils.ComputeHash(pod, &collisionCount),
 	)
 
 	// Create a PVC for the Pod.
-	logger.Info(fmt.Sprintf("Create PVC='%s'(namespace='%s').", name, req.Namespace))
+	// fluent-pvc-operator.tech.zozo.com/fluent-pvc-name の value で指定された FluentPVC が定義が存在していた場合、その定義に則って PVC の作成、及び PVC と Sidecar Container の Pod Manifest への Injection を行う
+	logger.Info(fmt.Sprintf("Createing PVC='%s'(namespace='%s').", fpvcbName, req.Namespace))
+
 	pvc := &corev1.PersistentVolumeClaim{}
-	pvc.SetName(name)
+	pvc.SetName(fpvcbName)
 	pvc.SetNamespace(req.Namespace)
 	pvc.Spec = *fpvc.Spec.PVCSpecTemplate.DeepCopy()
+	// PVC は fluent-pvc-operator が処理完了するまで削除されないよう、 Finalizer fluent-pvc-operator.tech.zozo.com/pvc-protection を指定しておく。
 	controllerutil.AddFinalizer(pvc, constants.PVCFinalizerName)
 	// NOTE: fluentpvcbinding does not own pvc for preventing pvc from becoming terminating when fluentpvcbinding
 	//       is deleted. This is because the finalizer job cannot mount the pvc if it is terminating.
+
+	// PVCの作成
 	if err := m.Create(ctx, pvc, &client.CreateOptions{}); err != nil {
-		logger.Error(err, fmt.Sprintf("Cannot Create PVC='%s'(namespace='%s').", name, req.Namespace))
+		logger.Error(err, fmt.Sprintf("Cannot Create PVC='%s'(namespace='%s').", fpvcbName, req.Namespace))
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
-	logger.Info(fmt.Sprintf("Create FluentPVCBinding='%s'(namespace='%s').", name, req.Namespace))
+	// 作成された PVC, PVC を Inject した Pod を管理する FluentPVCBinding も同時に生成する。
+	// PVC と FluentPVCBinding の名称は同一とする
+	logger.Info(fmt.Sprintf("Create FluentPVCBinding='%s'(namespace='%s').", fpvcbName, req.Namespace))
 	b := &fluentpvcv1alpha1.FluentPVCBinding{}
-	b.SetName(name)
+	b.SetName(fpvcbName)
 	b.SetNamespace(req.Namespace)
+
+	// FluentPVCBinding は FluentPVC, Pod, PVC の Name 及び UID を保持する
+	// ただし、 pod_webhook 到達時点の Pod は Schedule されておらず UID を保持していないため、後述の fluentpvcbinding_controller で最初に発見された同一名称 Pod の UID を保持するようにする。
+
 	b.SetFluentPVC(fpvc)
 	b.SetPod(pod)
 	b.SetPVC(pvc)
+	// FluentPVCBinding は fluent-pvc-operator.tech.zozo.com/fluentpvcbinding-protection を指定しておく。
 	controllerutil.AddFinalizer(b, constants.FluentPVCBindingFinalizerName)
+	// FluentPVCBinding は FluentPVC を Owner Controller とする
 	if err := ctrl.SetControllerReference(fpvc, b, m.Scheme()); err != nil {
-		logger.Error(err, fmt.Sprintf("Cannot set FluentPVC as a Controller OwnerReference on owned for FluentPVCBinding='%s'.", name))
+		logger.Error(err, fmt.Sprintf("Cannot set FluentPVC as a Controller OwnerReference on owned for FluentPVCBinding='%s'.", fpvcbName))
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
+
+	// FluentPVCBindingの作成
 	if err := m.Create(ctx, b, &client.CreateOptions{}); err != nil {
-		logger.Error(err, fmt.Sprintf("Cannot Create FluentPVCBinding='%s'.", name))
+		logger.Error(err, fmt.Sprintf("Cannot Create FluentPVCBinding='%s'.", fpvcbName))
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
+	// フェースの設定・更新
 	b.SetPhasePending()
 	if err := m.Status().Update(ctx, b); err != nil {
-		logger.Error(err, fmt.Sprintf("Cannot update the status of FluentPVCBinding='%s'.", name))
+		logger.Error(err, fmt.Sprintf("Cannot update the status of FluentPVCBinding='%s'.", fpvcbName))
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
@@ -148,21 +173,25 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	// PVC を作成し Pod Manifest へ Inject する
 	logger.Info(fmt.Sprintf(
 		"Inject PVC='%s' into Pod='%s'(namespace='%s', generatorName='%s').",
-		name, pod.Name, req.Namespace, pod.GenerateName,
+		fpvcbName, pod.Name, req.Namespace, pod.GenerateName,
 	))
 	podPatched := pod.DeepCopy()
 	if podPatched.Labels == nil {
 		podPatched.Labels = map[string]string{}
 	}
-	podPatched.Labels[constants.PodLabelFluentPVCBindingName] = name
+	// podにFluentPVCBindingの名前も追加（FluentPVCの名前は最初から追加されているはず）
+	podPatched.Labels[constants.PodLabelFluentPVCBindingName] = fpvcbName
+
+	// 共通のVolume
 	for _, v := range fpvc.Spec.CommonVolumes {
 		podutils.InjectOrReplaceVolume(&podPatched.Spec, v.DeepCopy())
 	}
+	// fluent-pvc-operator用のVolume
 	podutils.InjectOrReplaceVolume(&podPatched.Spec, &corev1.Volume{
 		Name: fpvc.Spec.PVCVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: name,
+				ClaimName: fpvcbName,
 			},
 		},
 	})
@@ -171,13 +200,19 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	// Inject the Sidecar Container Definition to the Pod Manifest.
 	// Sidecar Container の定義を Pod Manifest へ Inject する。
 	podutils.InjectOrReplaceContainer(&podPatched.Spec, fpvc.Spec.SidecarContainerTemplate.DeepCopy())
+
+	// 共通のVolumeMount
 	for _, vm := range fpvc.Spec.CommonVolumeMounts {
 		podutils.InjectOrReplaceVolumeMount(&podPatched.Spec, vm.DeepCopy())
 	}
+
+	// fluent-pvc-operator用のVolumeMount
 	podutils.InjectOrReplaceVolumeMount(&podPatched.Spec, &corev1.VolumeMount{
 		Name:      fpvc.Spec.PVCVolumeName,
 		MountPath: fpvc.Spec.PVCVolumeMountPath,
 	})
+
+	/// 共通のEnv
 	for _, e := range fpvc.Spec.CommonEnvs {
 		podutils.InjectOrReplaceEnv(&podPatched.Spec, e.DeepCopy())
 	}
