@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	// オリジナル
 	fluentpvcv1alpha1 "github.com/st-tech/fluent-pvc-operator/api/v1alpha1"
 	"github.com/st-tech/fluent-pvc-operator/constants"
 	hashutils "github.com/st-tech/fluent-pvc-operator/utils/hash"
@@ -34,17 +35,21 @@ func PodAdmissionResponse(pod *corev1.Pod, req admission.Request) admission.Resp
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
 }
 
+// パスにValidateとMutateの2つのWebhookを登録する
 func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
 	mgr.GetWebhookServer().Register("/pod/validate", &webhook.Admission{Handler: NewPodValidator(mgr.GetClient())})
 	mgr.GetWebhookServer().Register("/pod/mutate", &webhook.Admission{Handler: NewPodMutator(mgr.GetClient())})
 	return nil
 }
 
+// *Mutator* //
+
 type podMutator struct {
 	client.Client
 	decoder *admission.Decoder
 }
 
+// managerのclient登録。Handlerを返す
 func NewPodMutator(c client.Client) admission.Handler {
 	return &podMutator{Client: c}
 }
@@ -52,15 +57,17 @@ func NewPodMutator(c client.Client) admission.Handler {
 // Pod 作成時に実行される Admission Webhook が実装されている。
 func (m *podMutator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	logger := ctrl.LoggerFrom(ctx).WithName("podMutator").WithName("Handle")
-	if req.DryRun != nil && *req.DryRun {
-		// DryRunの場合、サイドカーコンテナとして扱う
-		return admission.Allowed("It' sidecar container.")
-	}
 
 	pod := &corev1.Pod{}
 	if err := m.decoder.Decode(req, pod); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
+
+	if req.DryRun != nil && *req.DryRun {
+		// DryRunの場合、サイドカーコンテナとして扱う
+		return admission.Allowed("It' sidecar container.")
+	}
+
 	// podマニフェストの中身を確認
 	marshaledPod, err := json.MarshalIndent(pod, "", "  ")
 	if err != nil {
@@ -182,16 +189,20 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	return PodAdmissionResponse(podPatched, req)
 }
 
+// decoder登録
 func (m *podMutator) InjectDecoder(d *admission.Decoder) error {
 	m.decoder = d
 	return nil
 }
+
+// *Validator* //
 
 type podValidator struct {
 	Client  client.Client
 	decoder *admission.Decoder
 }
 
+// managerのclient登録。Handlerを返す
 func NewPodValidator(c client.Client) admission.Handler {
 	return &podValidator{Client: c}
 }
