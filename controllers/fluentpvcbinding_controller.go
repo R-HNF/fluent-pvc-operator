@@ -33,6 +33,10 @@ import (
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 
+// FluentPVCBinding
+// FluentPVC 及び Pod, PVC, Job の状態管理を目的として fluent-pvc-operator が内部で自動生成する Custom Resource です。
+// 利用者がこの Custom Resource を定義することはありません。
+
 type fluentPVCBindingReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -47,6 +51,7 @@ func NewFluentPVCBindingReconciler(mgr ctrl.Manager) *fluentPVCBindingReconciler
 
 func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("Reconcile")
+
 	b := &fluentpvcv1alpha1.FluentPVCBinding{}
 	if err := r.Get(ctx, req.NamespacedName, b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -72,6 +77,9 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding に定義された Pod と PVC 及び Job を監視する。
+	// それぞれの状態変化に応じて FluentPVCBinding の状態を更新する。
+	// 各 controller （pod_controller、pvc_controller、fluentpvc_controller(?)）は FluentPVCBinding の状態に応じて処理内容を決定する。
 	pod := &corev1.Pod{}
 	podFound := true
 	if filled, err := r.fulfillFluentPVCBindingPod(ctx, b, pod); err != nil {
@@ -95,6 +103,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding に定義された PVC の Finalizer が削除されるまで削除出来ない。
 	if b.IsConditionFinalizerJobSucceeded() {
 		if pvcFound && controllerutil.ContainsFinalizer(pvc, constants.PVCFinalizerName) {
 			logger.Info(fmt.Sprintf("Skip processing because the finalizer of fluentpvcbinding='%s' is not removed.", b.Name))

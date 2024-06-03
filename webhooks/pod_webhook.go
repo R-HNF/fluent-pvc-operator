@@ -49,6 +49,7 @@ func NewPodMutator(c client.Client) admission.Handler {
 	return &podMutator{Client: c}
 }
 
+// Pod 作成時に実行される Admission Webhook が実装されている。
 func (m *podMutator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	logger := ctrl.LoggerFrom(ctx).WithName("podMutator").WithName("Handle")
 	if req.DryRun != nil && *req.DryRun {
@@ -69,6 +70,8 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	if len(pod.Spec.Containers) == 0 {
 		return admission.Denied("pod has no containers")
 	}
+
+	// FluentPVCBinding を作成する。
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 	if fpnvName, ok := pod.Labels[constants.PodLabelFluentPVCName]; !ok {
 		return admission.Denied(fmt.Sprintf("pod does not have %s label.", constants.PodLabelFluentPVCName))
@@ -97,6 +100,7 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 		fpvc.Name, hashutils.ComputeHash(fpvc, nil), hashutils.ComputeHash(pod, &collisionCount),
 	)
 
+	// Create a PVC for the Pod.
 	logger.Info(fmt.Sprintf("Create PVC='%s'(namespace='%s').", name, req.Namespace))
 	pvc := &corev1.PersistentVolumeClaim{}
 	pvc.SetName(name)
@@ -132,6 +136,9 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
+	// Dynamic PVC Provisioning: Admission Webhook によって Pod 作成時に PVC を生成し Manifest へ Inject します。
+	// Inject the PVC to the Pod Manifest.
+	// PVC を作成し Pod Manifest へ Inject する
 	logger.Info(fmt.Sprintf(
 		"Inject PVC='%s' into Pod='%s'(namespace='%s', generatorName='%s').",
 		name, pod.Name, req.Namespace, pod.GenerateName,
@@ -152,6 +159,10 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 			},
 		},
 	})
+
+	// Sidecar Container Injection: Admission Webhook によって Pod 作成時に任意の Container 定義を Manifest へ Inject します。
+	// Inject the Sidecar Container Definition to the Pod Manifest.
+	// Sidecar Container の定義を Pod Manifest へ Inject する。
 	podutils.InjectOrReplaceContainer(&podPatched.Spec, fpvc.Spec.SidecarContainerTemplate.DeepCopy())
 	for _, vm := range fpvc.Spec.CommonVolumeMounts {
 		podutils.InjectOrReplaceVolumeMount(&podPatched.Spec, vm.DeepCopy())

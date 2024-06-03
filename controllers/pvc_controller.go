@@ -44,6 +44,7 @@ func NewPVCReconciler(mgr ctrl.Manager) *pvcReconciler {
 func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("pvcReconciler").WithName("Reconcile")
 
+	// FluentPVCBinding に定義された PVC を監視する。
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.Get(ctx, req.NamespacedName, pvc); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -78,6 +79,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		"pvc='%s' is finalizing because the status of fluentpvcbinding='%s' is OutOfUse.",
 		pvc.Name, b.Name,
 	))
+
 	if !b.IsConditionFinalizerJobApplied() {
 		jobs := &batchv1.JobList{}
 		if err := r.List(ctx, jobs, matchingOwnerControllerField(b.Name)); client.IgnoreNotFound(err) != nil {
@@ -95,6 +97,9 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 
+		// PVC Auto Finalization: Pod 削除後 PVC 内のデータを処理するための Job を自動で発行し、Job が成功したら PVC を削除します。
+		// Apply the finalizer Job for the PVC.
+		// Pod から利用されなくなったら Finalizer Job を発行する。
 		j := &batchv1.Job{}
 		j.SetName(b.Name)
 		j.SetNamespace(b.Namespace)
@@ -139,6 +144,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return requeueResult(10 * time.Second), nil
 	}
 
+	// Finalizer Job が成功したら PVC から Finalizer を削除する。
 	logger.Info(fmt.Sprintf("Remove the finalizer='%s' from pvc='%s'", constants.PVCFinalizerName, pvc.Name))
 	controllerutil.RemoveFinalizer(pvc, constants.PVCFinalizerName)
 	if err := r.Update(ctx, pvc); client.IgnoreNotFound(err) != nil {
@@ -151,6 +157,8 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			pvc.Name, err,
 		)
 	}
+
+	// Delete the PVC when the finalizer Job is succeeded.
 	logger.Info(fmt.Sprintf("Delete pvc='%s' because it is finalized.", pvc.Name))
 	if err := r.Delete(ctx, pvc, deleteOptionsBackground(&pvc.UID, &pvc.ResourceVersion)); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)

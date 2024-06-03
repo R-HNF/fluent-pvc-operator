@@ -22,6 +22,10 @@ import (
 //+kubebuilder:rbac:groups=fluent-pvc-operator.tech.zozo.com,resources=fluentpvcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=fluent-pvc-operator.tech.zozo.com,resources=fluentpvcs/finalizers,verbs=update
 
+// FluentPVC
+// Provision する PVC の Template や Sidecar Container の定義など fluent-pvc-operator を利用するために必要な設定を定義する Custom Resource です。
+// 詳細な設定方法は [Configuration] の節で書きます。
+
 type fluentPVCReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -36,6 +40,8 @@ func NewFluentPVCReconciler(mgr ctrl.Manager) *fluentPVCReconciler {
 
 func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCReconciler").WithName("Reconcile")
+
+	// 処理対象の FluentPVC を Owner Controller として持つ全ての FluentPVCBinding の Finalizer を監視する。
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 	if err := r.Get(ctx, req.NamespacedName, fpvc); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -47,6 +53,8 @@ func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.List(ctx, bindings, matchingOwnerControllerField(fpvc.Name)); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
+	// 全ての FluentPVCBinding から Finalizer が削除されたら FluentPVC の Finalizer を削除する。
 	allBindingsFinalized := true
 	for _, b := range bindings.Items {
 		if controllerutil.ContainsFinalizer(&b, constants.FluentPVCBindingFinalizerName) {

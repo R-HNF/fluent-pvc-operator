@@ -37,6 +37,7 @@ func NewPodReconciler(mgr ctrl.Manager) *podReconciler {
 func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("podReconciler").WithName("Reconcile")
 
+	// FluentPVCBinding に定義された Pod を監視する。
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -63,6 +64,10 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
+	// Unhealthy Pod Auto Deletion: Injected Sidecar Container の異常を検知して Pod を自動で削除します
+	// Monitor the Sidecar Container status.
+	// Delete the Pod when the Sidecar Container is terminated with exit code != 0.
+	// Sidecar Container が異常終了したら Pod を削除する。
 	if !fpvc.Spec.DeletePodIfSidecarContainerTerminationDetected {
 		logger.Info(fmt.Sprintf(
 			"Skip processing because deletePodIfSidecarContainerTerminationDetected=false in fluentpvc='%s' for pod='%s'",
