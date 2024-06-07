@@ -337,6 +337,7 @@ func (r *fluentPVCBindingReconciler) deleteFluentPVCBinding(ctx context.Context,
 	return nil
 }
 
+/* コンディション系 */
 
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPVCLost(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf("pvc='%s'(UID='%s') is lost.(fluentpvcbinding='%s')", b.Spec.PVC.Name, b.Spec.PVC.UID, b.Name)
@@ -514,6 +515,7 @@ func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx con
 	}
 	return nil
 }
+
 
 
 func (r *fluentPVCBindingReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -106,6 +106,7 @@ const (
 
 type FluentPVCBindingPhase string
 
+// キャスト
 const (
 	FluentPVCBindingPhasePending               FluentPVCBindingPhase = "Pending"
 	FluentPVCBindingPhaseReady                 FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionReady)
