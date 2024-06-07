@@ -29,7 +29,8 @@
 				"mhutchie.git-graph",
 				"donjayamanne.githistory",
 				"eamodio.gitlens",
-				"golang.go"
+				"golang.go",
+				"766b.go-outliner"
 			]
 		}
 	}

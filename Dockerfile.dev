@@ -1,15 +1,5 @@
 FROM --platform=linux/arm64 ubuntu:20.04
 
-ENV GO_VERSION 1.16.15
-ENV KUBEBUILDER_VERSION v3.14.2
-
-# KEEP the value as arm64.
-# This variable is for kind on arm64, but should be left as is for any architectures.
-# References:
-# https://github.com/etcd-io/etcd/issues/10677
-# https://github.com/k0sproject/k0s/issues/424
-ENV ETCD_UNSUPPORTED_ARCH arm64
-
 # development tools
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     wget \
@@ -34,6 +24,16 @@ RUN apt-get install -y \
     && apt-get update && apt-get install -y \
     docker-ce-cli
 
+ENV GO_VERSION 1.16.15
+ENV KUBEBUILDER_VERSION v3.14.2
+
+# KEEP the value as arm64.
+# This variable is for kind on arm64, but should be left as is for any architectures.
+# References:
+# https://github.com/etcd-io/etcd/issues/10677
+# https://github.com/k0sproject/k0s/issues/424
+ENV ETCD_UNSUPPORTED_ARCH arm64
+
 # golang
 # ref. https://go.dev/doc/install
 RUN wget "https://go.dev/dl/go${GO_VERSION}.linux-"$(dpkg --print-architecture)".tar.gz" \
@@ -52,3 +52,5 @@ RUN curl -L -o kubebuilder "https://go.kubebuilder.io/dl/${KUBEBUILDER_VERSION}/
 # https://github.com/kind-ci/examples/blob/master/.github/workflows/kind.yml
 # https://kind.sigs.k8s.io/docs/user/resources/
 RUN GO111MODULE=on go install sigs.k8s.io/kind@latest
+
+RUN GO111MODULE=on go get github.com/766b/go-outliner
