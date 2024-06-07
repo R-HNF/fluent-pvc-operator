@@ -49,6 +49,7 @@ func NewFluentPVCBindingReconciler(mgr ctrl.Manager) *fluentPVCBindingReconciler
 	}
 }
 
+
 func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("Reconcile")
 
@@ -64,6 +65,8 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.Get(ctx, client.ObjectKey{Name: b.Spec.FluentPVC.Name}, fpvc); err != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
+	// FluentPVCBinding の定義と OwnerReference の関係の整合性が崩れている場合直す。(FluentPVC → FluentPVCBinding)
 	if !b.IsControlledBy(fpvc) {
 		if err := r.updateControllerFluentPVC(ctx, b, fpvc); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred: %w", err)
@@ -72,6 +75,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding の Condition が Unknown の場合、処理対象外とする
 	if b.IsConditionUnknown() {
 		logger.Info(fmt.Sprintf("Skip processing because fluentpvcbinding='%s' is unknown status.", b.Name))
 		return ctrl.Result{}, nil
@@ -80,6 +84,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// FluentPVCBinding に定義された Pod と PVC 及び Job を監視する。
 	// それぞれの状態変化に応じて FluentPVCBinding の状態を更新する。
 	// 各 controller （pod_controller、pvc_controller、fluentpvc_controller(?)）は FluentPVCBinding の状態に応じて処理内容を決定する。
+	// FluentPVCBinding で定義された Pod の UID が存在していない場合、FluentPVCBinding で定義された Pod の Name と同一名称の Pod を処理対象として FluentPVCBinding の UID を更新する
 	pod := &corev1.Pod{}
 	podFound := true
 	if filled, err := r.fulfillFluentPVCBindingPod(ctx, b, pod); err != nil {
@@ -88,6 +93,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		podFound = filled
 	}
 
+	// FluentPVCBinding で定義された PVC の確認
 	pvc := &corev1.PersistentVolumeClaim{}
 	pvcFound := true
 	if filled, err := r.fulfillFluentPVCBindingPVC(ctx, b, pvc); err != nil {
@@ -96,6 +102,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		pvcFound = filled
 	}
 
+	// PVC が Lost status の場合 FluentPVCBinding の Condition は Unknown となる
 	if pvcFound && pvc.Status.Phase == corev1.ClaimLost {
 		if err := r.updateConditionUnknownPVCLost(ctx, b); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -104,6 +111,8 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// FluentPVCBinding に定義された PVC の Finalizer が削除されるまで削除出来ない。
+	// FluentPVCBinding の Condition が FinalizerJobSucceded である場合、
+	//   PVC の finalizer が消されていれば FluentPVCBinding の finalizer も削除し、 FluentPVCBinding 自体も削除する
 	if b.IsConditionFinalizerJobSucceeded() {
 		if pvcFound && controllerutil.ContainsFinalizer(pvc, constants.PVCFinalizerName) {
 			logger.Info(fmt.Sprintf("Skip processing because the finalizer of fluentpvcbinding='%s' is not removed.", b.Name))
@@ -115,7 +124,9 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding に定義された Pod が一度も見つかっていない場合見つかるまで処理対象外とする。
 	if !podFound && !b.IsConditionReady() {
+		// ただし、1時間以上 Pod が見つからない場合 FluentPVCBinding の Condition は Unknown となる
 		if isCreatedBefore(b, 1*time.Hour) { // TODO: make it configurable?
 			if err := r.updateConditionUnknownPodNotFoundLongTime(ctx, b); err != nil {
 				return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -126,22 +137,28 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding の Condition が FinalizeJobSucceeded となっていない状態で、
+	// 定義された Pod も PVC も見つからない場合、FluentPVCBinding の Condition は Unknown となる
+
 	switch {
 	case !podFound && !pvcFound:
 		if err := r.updateConditionUnknownPodAndPVCNotFound(ctx, b); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 	case !podFound && pvcFound:
+		// FluentPVCBinding に定義された Pod が消えて、PVC のみ残っている場合、FluentPVCBinding の Condition は OutOfUse となる
 		if !b.IsConditionOutOfUse() {
 			if err := r.updateConditionOutOfUsePodDeletedPVCFound(ctx, b); err != nil {
 				return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 			}
 			return ctrl.Result{}, nil
 		}
+		// 既に OutOfUse である場合、pvc_controller が Apply した Finalizer Job の状態に応じて FluentPVCBinding の Condition を更新する
 		if err := r.updateConditionByFinalizerJobStatus(ctx, b); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 	case podFound && !pvcFound:
+		// FluentPVCBinding に定義された Pod のみが存在する場合 FluentPVCBinding の Condition は Unknown となる
 		switch pod.Status.Phase {
 		case corev1.PodPending, corev1.PodUnknown:
 			logger.Info(fmt.Sprintf(
@@ -158,6 +175,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 		}
 	case podFound && pvcFound:
+		// FluentPVCBinding に定義された Pod と PVC の両方が存在する場合 FluentPVCBinding の Condition は Ready となる
 		if !b.IsConditionReady() {
 			if err := r.updateConditionReadyPodFoundPVCFound(ctx, b); err != nil {
 				return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -172,6 +190,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				b.Spec.Pod.Name, b.Spec.Pod.UID, pod.Status.Phase, b.Spec.PVC.Name, b.Spec.PVC.UID,
 			))
 		case corev1.PodSucceeded, corev1.PodFailed:
+			// ただし Pod の処理が終了している場合 FluentPVCBinding の Condition は OutOfUse となる
 			if !b.IsConditionOutOfUse() {
 				if err := r.updateConditionOutOfUsePodCompletedPVCFound(ctx, b); err != nil {
 					return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -188,6 +207,8 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return ctrl.Result{}, nil
 }
 
+
+// FluentPVCBinding で定義された Pod の UID が存在していない場合、FluentPVCBinding で定義された Pod の Name と同一名称の Pod を処理対象として FluentPVCBinding の UID を更新する
 func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pod *corev1.Pod) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("fulfillFluentPVCBindingPod")
 	podFound := true
@@ -235,6 +256,7 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Cont
 	return podFound, nil
 }
 
+
 func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPVC(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pvc *corev1.PersistentVolumeClaim) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("fulfillFluentPVCBindingPVC")
 	pvcFound := true
@@ -252,6 +274,8 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPVC(ctx context.Cont
 	return pvcFound, nil
 }
 
+
+// FluentPVCBinding の定義と OwnerReference の関係の整合性が崩れている場合直す。(FluentPVC → FluentPVCBinding)
 func (r *fluentPVCBindingReconciler) updateControllerFluentPVC(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, fpvc *fluentpvcv1alpha1.FluentPVC) error {
 	if err := ctrl.SetControllerReference(fpvc, b, r.Scheme); err != nil {
 		return xerrors.Errorf("Unexpected error occurred: %w", err)
@@ -262,6 +286,7 @@ func (r *fluentPVCBindingReconciler) updateControllerFluentPVC(ctx context.Conte
 	}
 	return nil
 }
+
 
 func (r *fluentPVCBindingReconciler) fillPodUID(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pod *corev1.Pod) error {
 	podHasPVC := false
@@ -293,6 +318,9 @@ func (r *fluentPVCBindingReconciler) fillPodUID(ctx context.Context, b *fluentpv
 	return nil
 }
 
+
+// FluentPVCBinding の Condition が FinalizerJobSucceded である場合、
+//   PVC の finalizer が消されていれば FluentPVCBinding の finalizer も削除し、 FluentPVCBinding 自体も削除する
 func (r *fluentPVCBindingReconciler) deleteFluentPVCBinding(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("deleteFluentPVCBinding")
 	if controllerutil.ContainsFinalizer(b, constants.FluentPVCBindingFinalizerName) {
@@ -309,10 +337,12 @@ func (r *fluentPVCBindingReconciler) deleteFluentPVCBinding(ctx context.Context,
 	return nil
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPVCLost(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf("pvc='%s'(UID='%s') is lost.(fluentpvcbinding='%s')", b.Spec.PVC.Name, b.Spec.PVC.UID, b.Name)
 	return r.updateConditionUnknown(ctx, b, "PVCLost", message)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPodNotFoundLongTime(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
@@ -322,6 +352,7 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknownPodNotFoundLongTime(c
 	return r.updateConditionUnknown(ctx, b, "PodNotFound", message)
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPodAndPVCNotFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
 		"Both pod='%s'(UID='%s') and pvc='%s'(UID='%s') are not found even though it hasn't been finalized since it became Ready status.(fluentpvcbinding='%s')",
@@ -329,6 +360,7 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknownPodAndPVCNotFound(ctx
 	)
 	return r.updateConditionUnknown(ctx, b, "PodAndPVCNotFound", message)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPodRunningPVCNotFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
@@ -338,6 +370,7 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknownPodRunningPVCNotFound
 	return r.updateConditionUnknown(ctx, b, "PodRunningButPVCNotFound", message)
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionUnknownPodCompletedPVCNotFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
 		"pod='%s'(UID='%s') is completed, but pvc='%s'(UID='%s') is not found.(fluentpvcbinding='%s')",
@@ -345,6 +378,7 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknownPodCompletedPVCNotFou
 	)
 	return r.updateConditionUnknown(ctx, b, "PodCompletedPVCNotFound", message)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateConditionUnknown(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("updateConditionUnknown")
@@ -356,6 +390,7 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknown(ctx context.Context,
 	return nil
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodDeletedPVCFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
 		"pod='%s'(UID='%s') is deleted and pvc='%s'(UID='%s') is found.(fluentpvcbinding='%s')",
@@ -363,6 +398,7 @@ func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodDeletedPVCFound(c
 	)
 	return r.updateConditionOutOfUse(ctx, b, "PodDeletedPVCFound", message)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodCompletedPVCFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
@@ -372,9 +408,11 @@ func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodCompletedPVCFound
 	return r.updateConditionOutOfUse(ctx, b, "PodCompletedPVCFound", message)
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionOutOfUse(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string) error {
 	return r.updateCondition(ctx, b, reason, message, b.SetConditionOutOfUse)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateConditionReadyPodFoundPVCFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	message := fmt.Sprintf(
@@ -384,9 +422,11 @@ func (r *fluentPVCBindingReconciler) updateConditionReadyPodFoundPVCFound(ctx co
 	return r.updateConditionReady(ctx, b, "PodFoundPVCFound", message)
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionReady(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string) error {
 	return r.updateCondition(ctx, b, reason, message, b.SetConditionReady)
 }
+
 
 func (r *fluentPVCBindingReconciler) updateCondition(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string, conditionUpdateFunc func(string, string)) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("updateCondition")
@@ -398,6 +438,7 @@ func (r *fluentPVCBindingReconciler) updateCondition(ctx context.Context, b *flu
 	return nil
 }
 
+
 func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("updateConditionByFinalizerJobStatus")
 	logger.Info(fmt.Sprintf("Check the finalizer jobs for fluentpvcbinding='%s'.", b.Name))
@@ -406,9 +447,12 @@ func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx con
 		return xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 	if len(jobs.Items) == 0 {
+		// Finalizer Job が見つからない場合、見つかるまで待ち続ける
 		reason := "FinalizerJobNotFound"
 		message := fmt.Sprintf("Finalizer jobs for fluentpvcbinding='%s' is not found.", b.Name)
 		needUpdate := false
+
+		// Finalizer Job が見つかった場合、FluentPVCBinding の Condition は FinalizerJobApplied となる
 		if b.IsConditionFinalizerJobApplied() {
 			b.SetConditionNotFinalizerJobApplied(reason, message)
 			needUpdate = true
@@ -447,12 +491,16 @@ func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx con
 		logger.Info(message)
 		b.SetConditionFinalizerJobApplied("FinalizerJobFound", message)
 	}
+
+	// Finalizer Job の処理が成功していた場合、FluentPVCBinding の Condition は FinalizerJobSucceeded となる
 	if isJobSucceeded(j) {
 		needUpdate = true
 		message := fmt.Sprintf("Update the status fluentpvcbinding='%s' 'FinalizerJobSucceeded' because the finalizer job='%s' is succeeded", b.Name, j.Name)
 		logger.Info(message)
 		b.SetConditionFinalizerJobSucceeded("FinalizerJobSucceeded", message)
 	}
+
+	// Finalizer Job の処理が失敗していた場合、FluentPVCBinding の Condition は FinalizerJobFailed となる
 	if isJobFailed(j) {
 		needUpdate = true
 		message := fmt.Sprintf("Update the status fluentpvcbinding='%s' 'FinalizerJobFailed' because the finalizer job='%s' is failed.", b.Name, j.Name)
@@ -466,6 +514,7 @@ func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx con
 	}
 	return nil
 }
+
 
 func (r *fluentPVCBindingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()

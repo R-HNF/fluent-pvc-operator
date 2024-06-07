@@ -49,6 +49,13 @@ func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
+	// 処理対象の FluentPVC を Owner Controller とする全ての FluentPVCBinding の Finalizer が削除されていない場合、
+	// 処理対象の FluentPVC に Finalizer fluent-pvc-operator.tech.zozo.com/fluentpvc-protection を付与する
+
+	// 処理対象の FluentPVC を Owner Controller とする全ての FluentPVCBinding の Finalizer が削除されている場合、
+	// 処理対象の FluentPVC から Finalizer fluent-pvc-operator.tech.zozo.com/fluentpvc-protection を削除する
+
 	bindings := &fluentpvcv1alpha1.FluentPVCBindingList{}
 	if err := r.List(ctx, bindings, matchingOwnerControllerField(fpvc.Name)); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)

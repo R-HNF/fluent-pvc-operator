@@ -46,6 +46,7 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
+	// annotation で fluent-pvc-operator.tech.zozo.com/fluent-pvc-name: hogehoge が定義されている Pod を処理対象とする
 	var fluentPVCName string
 	if v, ok := pod.Labels[constants.PodLabelFluentPVCName]; !ok {
 		// not target
@@ -54,11 +55,13 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		fluentPVCName = v
 	}
 
+	// Pod の phase が Running である場合のみ処理対象とする
 	if !isPodRunningPhase(pod) {
 		logger.Info(fmt.Sprintf("Skip processing because pod='%s' is '%s' phase.", pod.Name, pod.Status.Phase))
 		return ctrl.Result{}, nil
 	}
 
+	// fluent-pvc-operator.tech.zozo.com/fluent-pvc-name の value で指定された FluentPVC が定義されていない場合エラーとする
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 	if err := r.Get(ctx, client.ObjectKey{Name: fluentPVCName}, fpvc); err != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -68,6 +71,7 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	// Monitor the Sidecar Container status.
 	// Delete the Pod when the Sidecar Container is terminated with exit code != 0.
 	// Sidecar Container が異常終了したら Pod を削除する。
+	// FluentPVC の設定で Sidecar Container の Health Check が Enable である場合のみ処理対象とする
 	if !fpvc.Spec.DeletePodIfSidecarContainerTerminationDetected {
 		logger.Info(fmt.Sprintf(
 			"Skip processing because deletePodIfSidecarContainerTerminationDetected=false in fluentpvc='%s' for pod='%s'",
@@ -75,6 +79,8 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		))
 		return ctrl.Result{}, nil
 	}
+
+	// Sidecar Container の状態を確認し、 Terminated with exit code != 0 である場合 Pod を削除する
 
 	containerName := fpvc.Spec.SidecarContainerTemplate.Name
 	status := findContainerStatusByName(&pod.Status, containerName)
@@ -95,6 +101,8 @@ func (r *podReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	))
 
 	// TODO: Respects PodDisruptionBudget.
+	// (todo) Pod 削除時に PDB の設定や Deployment の場合は minAvailable を考慮する
+	// (todo) Sidecar Container が Not Ready となった場合も削除対象とする
 	deleteOptions := deleteOptionsBackground(&pod.UID, &pod.ResourceVersion)
 	if err := r.Delete(ctx, pod, deleteOptions); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)

@@ -52,6 +52,8 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
+	// 処理対象の PVC と同名の FluentPVCBinding が存在していない場合、処理対象外とする
 	b := &fluentpvcv1alpha1.FluentPVCBinding{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: pvc.Name}, b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -59,6 +61,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
 	if pvc.UID != b.Spec.PVC.UID {
 		logger.Info(fmt.Sprintf(
 			"Skip processing because pvc.UID='%s' is different from fluentpvcbinding.Spec.PVC.UID='%s' for name='%s'.",
@@ -66,10 +69,14 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		))
 		return ctrl.Result{}, nil
 	}
+
+	// FluentPVCBinding の Condition が Unknown の場合、処理対象外とする
 	if b.IsConditionUnknown() {
 		logger.Info(fmt.Sprintf("fluentpvcbinding='%s' is unknown status, so skip processing.", b.Name))
 		return ctrl.Result{}, nil
 	}
+
+	// FluentPVCBinding の Condition が OutOfUse ではない場合、処理対象外とする
 	if !b.IsConditionOutOfUse() {
 		logger.Info(fmt.Sprintf("fluentpvcbinding='%s' is not out of use yet.", b.Name))
 		return requeueResult(10 * time.Second), nil
@@ -80,8 +87,11 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		pvc.Name, b.Name,
 	))
 
+	// FluentPVCBinding の Condition が FinalizerJobApplied ではない場合、 Finalizer Job を Apply する
 	if !b.IsConditionFinalizerJobApplied() {
 		jobs := &batchv1.JobList{}
+
+		// Finalizer Job が既に Apply されている場合、 FluentPVCBinding の状態更新が遅延しているだけなので処理対象外とする
 		if err := r.List(ctx, jobs, matchingOwnerControllerField(b.Name)); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
@@ -92,6 +102,8 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			))
 			return requeueResult(10 * time.Second), nil
 		}
+
+		// Finalizer Job は Fluent PVC で定義された JobSpec に処理対象の PVC を Mount して Apply する
 		fpvc := &fluentpvcv1alpha1.FluentPVC{}
 		if err := r.Get(ctx, client.ObjectKey{Name: metav1.GetControllerOf(b).Name}, fpvc); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -100,6 +112,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		// PVC Auto Finalization: Pod 削除後 PVC 内のデータを処理するための Job を自動で発行し、Job が成功したら PVC を削除します。
 		// Apply the finalizer Job for the PVC.
 		// Pod から利用されなくなったら Finalizer Job を発行する。
+		// Finalizer Job は FluentPVCBinding 及び PVC と同名とし、2つ以上の Job が実行されないようにする。
 		j := &batchv1.Job{}
 		j.SetName(b.Name)
 		j.SetNamespace(b.Namespace)
@@ -131,6 +144,8 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 	}
+
+	// FluentPVCBinding の Condition が FinalizerJobApplied ではあるが FinalizerJobSucceeded もしくは FinalizerJobFailed ではない場合、FinalizerJobSucceeded もしくは FinalizerJobFailed となるまで処理対象外とする。
 	if !b.IsConditionFinalizerJobSucceeded() && !b.IsConditionFinalizerJobFailed() {
 		logger.Info(fmt.Sprintf(
 			"pvc='%s' is finalizing by fluentpvcbinding='%s'.",
@@ -139,10 +154,13 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return requeueResult(10 * time.Second), nil
 	}
 
+	// FluentPVCBinding の Condition が FinalizerJobFailed である場合、処理対象外とする。
 	if b.IsConditionFinalizerJobFailed() {
 		logger.Info(fmt.Sprintf("Skip processing because the finalizer job='%s' is failed.", b.Name))
 		return requeueResult(10 * time.Second), nil
 	}
+
+	// FluentPVCBinding の Condition が FinalizerJobSucceeded である場合、PVC に指定した Finalizer fluent-pvc-operator.tech.zozo.com/pvc-protection を削除し、 PVC も削除する
 
 	// Finalizer Job が成功したら PVC から Finalizer を削除する。
 	logger.Info(fmt.Sprintf("Remove the finalizer='%s' from pvc='%s'", constants.PVCFinalizerName, pvc.Name))
