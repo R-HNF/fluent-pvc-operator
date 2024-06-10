@@ -1,4 +1,5 @@
-// FluentPVCBinding構造体にヘルパー関数を足している
+// FluentPVCBindingだけ、FluentPVCはなし
+// 構造体にヘルパー関数を足している
 
 package v1alpha1
 
@@ -58,35 +59,41 @@ func (b *FluentPVCBinding) SetConditionUnknown(reason, message string) {
 	b.setConditionTrue(FluentPVCBindingConditionUnknown, reason, message)
 }
 
-func (b *FluentPVCBinding) SetConditionNotReady(reason, message string) {
-	b.setConditionFalse(FluentPVCBindingConditionReady, reason, message)
-}
+// func (b *FluentPVCBinding) SetConditionNotReady(reason, message string) {
+// 	b.setConditionFalse(FluentPVCBindingConditionReady, reason, message)
+// }
 
-func (b *FluentPVCBinding) SetConditionNotOutOfUse(reason, message string) {
-	b.setConditionFalse(FluentPVCBindingConditionOutOfUse, reason, message)
-}
+// func (b *FluentPVCBinding) SetConditionNotOutOfUse(reason, message string) {
+// 	b.setConditionFalse(FluentPVCBindingConditionOutOfUse, reason, message)
+// }
 
 func (b *FluentPVCBinding) SetConditionNotFinalizerJobApplied(reason, message string) {
 	b.setConditionFalse(FluentPVCBindingConditionFinalizerJobApplied, reason, message)
 }
 
-func (b *FluentPVCBinding) SetConditionNotFinalizerJobSucceeded(reason, message string) {
-	b.setConditionFalse(FluentPVCBindingConditionFinalizerJobSucceeded, reason, message)
-}
+// func (b *FluentPVCBinding) SetConditionNotFinalizerJobSucceeded(reason, message string) {
+// 	b.setConditionFalse(FluentPVCBindingConditionFinalizerJobSucceeded, reason, message)
+// }
 
 func (b *FluentPVCBinding) SetConditionNotFinalizerJobFailed(reason, message string) {
 	b.setConditionFalse(FluentPVCBindingConditionFinalizerJobFailed, reason, message)
 }
 
-func (b *FluentPVCBinding) SetConditionNotUnknown(reason, message string) {
-	b.setConditionFalse(FluentPVCBindingConditionUnknown, reason, message)
-}
+// func (b *FluentPVCBinding) SetConditionNotUnknown(reason, message string) {
+// 	b.setConditionFalse(FluentPVCBindingConditionUnknown, reason, message)
+// }
 
 func (b *FluentPVCBinding) setConditionTrue(t FluentPVCBindingConditionType, reason, message string) {
+	// metav1.ConditionTrue:
+	//   条件が満たされていることを示します。
+	//   例えば、Pod の状態が正常である場合、この条件が使用されます。
 	b.setCondition(t, metav1.ConditionTrue, reason, message)
 }
 
 func (b *FluentPVCBinding) setConditionFalse(t FluentPVCBindingConditionType, reason, message string) {
+    // metav1.ConditionFalse:
+    //   条件が満たされていないことを示します。
+    //   例えば、Pod の状態が異常である場合、この条件が使用されます。
 	b.setCondition(t, metav1.ConditionFalse, reason, message)
 }
 
@@ -98,6 +105,10 @@ func (b *FluentPVCBinding) setCondition(t FluentPVCBindingConditionType, status 
 		Message: message,
 	})
 	b.resetPhase()
+}
+
+func (b *FluentPVCBinding) SetPhasePending() {
+	b.Status.Phase = FluentPVCBindingPhasePending
 }
 
 func (b *FluentPVCBinding) resetPhase() {
@@ -115,9 +126,12 @@ func (b *FluentPVCBinding) resetPhase() {
 		// NOTE: Sort in order of LastTransisionTime from newest to oldest.
 		return conditions[j].LastTransitionTime.Before(&conditions[i].LastTransitionTime)
 	})
+
 	// NOTE: Use the latest condition
 	b.Status.Phase = FluentPVCBindingPhase(conditions[0].Type)
 }
+
+
 
 func (b *FluentPVCBinding) SetFluentPVC(fpvc *FluentPVC) {
 	b.Spec.FluentPVC = b.toObjectIdentity(&fpvc.ObjectMeta)
@@ -130,15 +144,13 @@ func (b *FluentPVCBinding) SetPod(pod *corev1.Pod) {
 	b.Spec.Pod = b.toObjectIdentity(&pod.ObjectMeta)
 }
 
+
+
 func (b *FluentPVCBinding) toObjectIdentity(o *metav1.ObjectMeta) ObjectIdentity {
 	return ObjectIdentity{
 		Name: o.Name,
 		UID:  o.UID,
 	}
-}
-
-func (b *FluentPVCBinding) SetPhasePending() {
-	b.Status.Phase = FluentPVCBindingPhasePending
 }
 
 func (b *FluentPVCBinding) IsControlledBy(fpvc *FluentPVC) bool {

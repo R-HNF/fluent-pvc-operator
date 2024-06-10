@@ -36,7 +36,7 @@ type FluentPVCSpec struct {
 	// Common volumeMounts to inject into all containers.
 	//+optional
 	CommonVolumeMounts []corev1.VolumeMount `json:"commonVolumeMounts,omitempty"`
-	// Delete the pod if the sidecar container termination is detected.
+	// Delete the target pod if the sidecar container termination is detected.
 	//+kubebuilder:validation:Required
 	DeletePodIfSidecarContainerTerminationDetected bool `json:"deletePodIfSidecarContainerTerminationDetected,omitempty"`
 }
@@ -71,6 +71,10 @@ type FluentPVCList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []FluentPVC `json:"items"`
 }
+
+
+
+
 
 type FluentPVCBindingSpec struct {
 	// FluentPVC Name to bind.
@@ -109,12 +113,12 @@ type FluentPVCBindingPhase string
 // キャスト
 const (
 	FluentPVCBindingPhasePending               FluentPVCBindingPhase = "Pending"
-	FluentPVCBindingPhaseReady                 FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionReady)
-	FluentPVCBindingPhaseOutOfUse              FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionOutOfUse)
-	FluentPVCBindingPhaseFinalizerJobApplied   FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobApplied)
-	FluentPVCBindingPhaseFinalizerJobSucceeded FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobSucceeded)
-	FluentPVCBindingPhaseFinalizerJobFailed    FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobFailed)
-	FluentPVCBindingPhaseUnknown               FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionUnknown)
+	// FluentPVCBindingPhaseReady                 FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionReady)
+	// FluentPVCBindingPhaseOutOfUse              FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionOutOfUse)
+	// FluentPVCBindingPhaseFinalizerJobApplied   FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobApplied)
+	// FluentPVCBindingPhaseFinalizerJobSucceeded FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobSucceeded)
+	// FluentPVCBindingPhaseFinalizerJobFailed    FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionFinalizerJobFailed)
+	// FluentPVCBindingPhaseUnknown               FluentPVCBindingPhase = FluentPVCBindingPhase(FluentPVCBindingConditionUnknown)
 )
 
 // FluentPVCStatus defines the observed state of FluentPVC
@@ -152,6 +156,9 @@ type FluentPVCBindingList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []FluentPVCBinding `json:"items"`
 }
+
+
+
 
 func init() {
 	SchemeBuilder.Register(
