@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -71,7 +72,14 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	// FluentPVCBinding の Condition が Unknown の場合、処理対象外とする
+	marshaledConditions, err := json.Marshal(b.Status.Conditions)
+	if err != nil {
+		fmt.Println("error")
+	}
+	logger.Info(string(marshaledConditions))
+	fmt.Printf("%s\n", marshaledConditions)
+
+	// FluentPVCBinding の Condition が Unknown が True の場合、処理対象外とする
 	if b.IsConditionUnknown() {
 		logger.Info(fmt.Sprintf("fluentpvcbinding='%s' is unknown status, so skip processing.", b.Name))
 		return ctrl.Result{}, nil
