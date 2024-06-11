@@ -23,7 +23,34 @@ func matchingOwnerControllerField(ownerName string) client.MatchingFields {
 
 
 
+func isOwnerFluentPVCBinding(owner *metav1.OwnerReference) bool {
+	return owner != nil &&
+		owner.APIVersion == fluentpvcv1alpha1.GroupVersion.String() &&
+		owner.Kind == "FluentPVCBinding"
+}
 
+func isOwnerFluentPVC(owner *metav1.OwnerReference) bool {
+	return owner != nil &&
+		owner.APIVersion == fluentpvcv1alpha1.GroupVersion.String() &&
+		owner.Kind == "FluentPVC"
+}
+
+func getFinishedStatus(j *batchv1.Job) (bool, batchv1.JobConditionType) {
+	for _, c := range j.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+			return true, c.Type
+		}
+	}
+	return false, ""
+}
+
+// fluent pvc binding controller
+
+func isCreatedBefore(obj client.Object, duration time.Duration) bool {
+	threshold := metav1.NewTime(time.Now().Add(-duration))
+	creationTimestamp := obj.GetCreationTimestamp()
+	return creationTimestamp.Before(&threshold)
+}
 
 func indexJobByOwnerFluentPVCBinding(obj client.Object) []string {
 	j := obj.(*batchv1.Job)
@@ -34,11 +61,7 @@ func indexJobByOwnerFluentPVCBinding(obj client.Object) []string {
 	return []string{owner.Name}
 }
 
-func isOwnerFluentPVCBinding(owner *metav1.OwnerReference) bool {
-	return owner != nil &&
-		owner.APIVersion == fluentpvcv1alpha1.GroupVersion.String() &&
-		owner.Kind == "FluentPVCBinding"
-}
+// fluent pvc controller
 
 func indexFluentPVCBindingByOwnerFluentPVC(obj client.Object) []string {
 	b := obj.(*fluentpvcv1alpha1.FluentPVCBinding)
@@ -49,26 +72,13 @@ func indexFluentPVCBindingByOwnerFluentPVC(obj client.Object) []string {
 	return []string{owner.Name}
 }
 
-func isOwnerFluentPVC(owner *metav1.OwnerReference) bool {
-	return owner != nil &&
-		owner.APIVersion == fluentpvcv1alpha1.GroupVersion.String() &&
-		owner.Kind == "FluentPVC"
-}
+// pvc controller
 
 func requeueResult(requeueAfter time.Duration) ctrl.Result {
 	return ctrl.Result{
 		Requeue:      true,
 		RequeueAfter: requeueAfter,
 	}
-}
-
-func getFinishedStatus(j *batchv1.Job) (bool, batchv1.JobConditionType) {
-	for _, c := range j.Status.Conditions {
-		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
-			return true, c.Type
-		}
-	}
-	return false, ""
 }
 
 // job
@@ -107,12 +117,4 @@ func deleteOptionsBackground(uid *types.UID, resourceVersion *string) *client.De
 		},
 		PropagationPolicy: (*metav1.DeletionPropagation)(pointer.StringPtr(string(metav1.DeletePropagationBackground))),
 	}
-}
-
-// fluent pvc binding controller
-
-func isCreatedBefore(obj client.Object, duration time.Duration) bool {
-	threshold := metav1.NewTime(time.Now().Add(-duration))
-	creationTimestamp := obj.GetCreationTimestamp()
-	return creationTimestamp.Before(&threshold)
 }
