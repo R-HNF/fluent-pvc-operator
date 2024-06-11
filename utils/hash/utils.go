@@ -16,7 +16,7 @@ import (
 // ref. https://github.com/kubernetes/kubernetes/blob/f803daaca74ecd2a9b75d8945a6b5403aa5e47a9/pkg/controller/controller_utils.go#L1189-L1201
 func ComputeHash(obj interface{}, collisionCount *int32) string {
 	objHasher := fnv.New32a()
-	DeepHashObject(objHasher, obj)
+	_DeepHashObject(objHasher, obj)
 
 	// Add collisionCount in the hash if it exists.
 	if collisionCount != nil {
@@ -31,7 +31,7 @@ func ComputeHash(obj interface{}, collisionCount *int32) string {
 // DeepHashObject writes specified object to hash using the spew library
 // which follows pointers and prints actual values of the nested objects
 // ensuring the hash does not change when a pointer changes.
-func DeepHashObject(hasher hash.Hash, objectToWrite interface{}) {
+func _DeepHashObject(hasher hash.Hash, objectToWrite interface{}) {
 	hasher.Reset()
 	printer := spew.ConfigState{
 		Indent:         " ",

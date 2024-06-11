@@ -149,7 +149,7 @@ func (b *FluentPVCBinding) SetPod(pod *corev1.Pod) {
 func (b *FluentPVCBinding) toObjectIdentity(o *metav1.ObjectMeta) ObjectIdentity {
 	return ObjectIdentity{
 		Name: o.Name,
-		UID:  o.UID,
+		UID:  o.UID, // ここ重要
 	}
 }
 

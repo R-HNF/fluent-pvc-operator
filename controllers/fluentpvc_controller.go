@@ -41,7 +41,7 @@ func NewFluentPVCReconciler(mgr ctrl.Manager) *fluentPVCReconciler {
 func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCReconciler").WithName("Reconcile")
 
-	// 処理対象の FluentPVC を Owner Controller として持つ全ての FluentPVCBinding の Finalizer を監視する。
+	// オブジェクトに変換
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 	if err := r.Get(ctx, req.NamespacedName, fpvc); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -50,6 +50,9 @@ func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
+
+	// 処理対象の FluentPVC を Owner Controller として持つ全ての FluentPVCBinding の Finalizer を監視する。
+
 	// 処理対象の FluentPVC を Owner Controller とする全ての FluentPVCBinding の Finalizer が削除されていない場合、
 	// 処理対象の FluentPVC に Finalizer fluent-pvc-operator.tech.zozo.com/fluentpvc-protection を付与する
 
@@ -57,19 +60,25 @@ func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 処理対象の FluentPVC から Finalizer fluent-pvc-operator.tech.zozo.com/fluentpvc-protection を削除する
 
 	bindings := &fluentpvcv1alpha1.FluentPVCBindingList{}
+	// FluentPVC を親として持つ FluentPVCBinding を取得する
+	// 存在しない場合は無視する
 	if err := r.List(ctx, bindings, matchingOwnerControllerField(fpvc.Name)); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
 	// 全ての FluentPVCBinding から Finalizer が削除されたら FluentPVC の Finalizer を削除する。
 	allBindingsFinalized := true
+
+	// FluentPVCBinding に Finalizer が付与されているか確認する
 	for _, b := range bindings.Items {
 		if controllerutil.ContainsFinalizer(&b, constants.FluentPVCBindingFinalizerName) {
 			allBindingsFinalized = false
 			break
 		}
 	}
+
 	if allBindingsFinalized {
+		// 全ての FluentPVCBinding の Finalizer を削除されている場合、FluentPVC の Finalizer を削除する
 		logger.Info(fmt.Sprintf(
 			"Remove the finalizer: %s from fluentpvc: %s because all fluentpvcbindings are finalized.",
 			constants.FluentPVCFinalizerName, fpvc.Name,
@@ -80,8 +89,11 @@ func (r *fluentPVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"Add the finalizer: %s to fluentpvc: %s because some fluentpvcbindings are not finalized.",
 			constants.FluentPVCFinalizerName, fpvc.Name,
 		))
+		// 1つでも Finalizer がついたままの FluentPVCBinding がある場合、FluentPVC に Finalizer を付与する（すでに付与されているときは付け直しになる）
 		controllerutil.AddFinalizer(fpvc, constants.FluentPVCFinalizerName)
 	}
+
+	// FluentPVC の状態を更新する
 	if err := r.Update(ctx, fpvc); err != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
