@@ -38,25 +38,29 @@ func NewFluentPVCValidator(c client.Client) admission.Handler {
 
 func (v *FluentPVCValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	logger := ctrl.LoggerFrom(ctx).WithName("FluentPVCValidator").WithName("Handle")
-	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 
+	fpvc := &fluentpvcv1alpha1.FluentPVC{}
+	// オブジェクトの変換
 	err := v.decoder.Decode(req, fpvc)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	// PVCのアクセスモードがReadWriteOnceであることを確認
 	for _, m := range fpvc.Spec.PVCSpecTemplate.AccessModes {
 		if m != corev1.ReadWriteOnce {
 			return admission.Denied(fmt.Sprintf("Only 'ReadWriteOnce' is acceptable for FluentPVC.spec.pvcSpecTemplate.accessModes, but '%s' is specified.", fpvc.Spec.PVCSpecTemplate.AccessModes))
 		}
 	}
 
+	// 指定されたStorageClassが存在することを確認
 	storageClass := &storagev1.StorageClass{}
 	if err := v.Client.Get(ctx, client.ObjectKey{Name: *fpvc.Spec.PVCSpecTemplate.StorageClassName}, storageClass); err != nil {
 		logger.Error(err, fmt.Sprintf("Cannot Get StorageClass with FluentPVC.Spec.PVCSpecTemplate.StorageClassName: '%s'", *fpvc.Spec.PVCSpecTemplate.StorageClassName))
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
+	// DryRunで確認
 	j := &batchv1.Job{}
 	j.SetName(fpvc.Name)
 	j.SetNamespace(corev1.NamespaceDefault)
@@ -65,6 +69,11 @@ func (v *FluentPVCValidator) Handle(ctx context.Context, req admission.Request) 
 	for _, e := range fpvc.Spec.CommonEnvs {
 		podutils.InjectOrReplaceEnv(&j.Spec.Template.Spec, e.DeepCopy())
 	}
+	// 下記の分がないのは何故? エラーになる?
+	// InjectOrReplaceContainer
+	// InjectOrReplaceVolume
+	// InjectOrReplaceVolumeMount
+
 
 	if err := v.Client.Create(ctx, j, client.DryRunAll); err != nil {
 		logger.Error(err, fmt.Sprintf("JobSpec is invalid. FluentPVC Name: '%s'", fpvc.Name))

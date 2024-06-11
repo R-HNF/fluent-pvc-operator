@@ -182,7 +182,8 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	// podにFluentPVCBindingの名前も追加（FluentPVCの名前は最初から追加されているはず）
 	podPatched.Labels[constants.PodLabelFluentPVCBindingName] = fpvcbName
 
-	// 共通のVolume
+	// podを作るタイミングで、共通のVolumeを注入する
+	// シークレット情報
 	for _, v := range fpvc.Spec.CommonVolumes {
 		podutils.InjectOrReplaceVolume(&podPatched.Spec, v.DeepCopy())
 	}
@@ -201,18 +202,18 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 	// Sidecar Container の定義を Pod Manifest へ Inject する。
 	podutils.InjectOrReplaceContainer(&podPatched.Spec, fpvc.Spec.SidecarContainerTemplate.DeepCopy())
 
-	// 共通のVolumeMount
+	// podを作るタイミングで、共通のVolumeMountを注入する
+	// シークレット情報
 	for _, vm := range fpvc.Spec.CommonVolumeMounts {
 		podutils.InjectOrReplaceVolumeMount(&podPatched.Spec, vm.DeepCopy())
 	}
-
 	// fluent-pvc-operator用のVolumeMount
 	podutils.InjectOrReplaceVolumeMount(&podPatched.Spec, &corev1.VolumeMount{
 		Name:      fpvc.Spec.PVCVolumeName,
 		MountPath: fpvc.Spec.PVCVolumeMountPath,
 	})
 
-	/// 共通のEnv
+	// target podに共通のEnvを注入
 	for _, e := range fpvc.Spec.CommonEnvs {
 		podutils.InjectOrReplaceEnv(&podPatched.Spec, e.DeepCopy())
 	}

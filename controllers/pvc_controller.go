@@ -118,9 +118,13 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		j.SetNamespace(b.Namespace)
 		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, j, func() error {
 			j.Spec = *fpvc.Spec.PVCFinalizerJobSpecTemplate.DeepCopy()
+
+			// jobを作るタイミングで、共通のVolumeを注入する
+			// シークレット情報
 			for _, v := range fpvc.Spec.CommonVolumes {
 				podutils.InjectOrReplaceVolume(&j.Spec.Template.Spec, v.DeepCopy())
 			}
+			// fluent-pvc-operator用のVolumeMount
 			podutils.InjectOrReplaceVolume(&j.Spec.Template.Spec, &corev1.Volume{
 				Name: fpvc.Spec.PVCVolumeName,
 				VolumeSource: corev1.VolumeSource{
@@ -129,13 +133,19 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 					},
 				},
 			})
+
+			// jobを作るタイミングで、共通のVolumeMountを注入する
+			// シークレット情報
 			for _, vm := range fpvc.Spec.CommonVolumeMounts {
 				podutils.InjectOrReplaceVolumeMount(&j.Spec.Template.Spec, vm.DeepCopy())
 			}
+			// fluent-pvc-operator用のVolumeMount
 			podutils.InjectOrReplaceVolumeMount(&j.Spec.Template.Spec, &corev1.VolumeMount{
 				Name:      fpvc.Spec.PVCVolumeName,
 				MountPath: fpvc.Spec.PVCVolumeMountPath,
 			})
+
+			// jobを作るタイミングで、共通のEnvを注入する
 			for _, e := range fpvc.Spec.CommonEnvs {
 				podutils.InjectOrReplaceEnv(&j.Spec.Template.Spec, e.DeepCopy())
 			}

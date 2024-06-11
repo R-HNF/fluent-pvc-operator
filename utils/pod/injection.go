@@ -64,9 +64,10 @@ func InjectOrReplaceVolumeMount(podSpec *corev1.PodSpec, volumeMount *corev1.Vol
 func InjectOrReplaceEnv(podSpec *corev1.PodSpec, env *corev1.EnvVar) {
 	containers := []corev1.Container{}
 	for _, c := range podSpec.Containers {
-		c := *c.DeepCopy()
 		envs := []corev1.EnvVar{}
 		envFound := false
+		c := *c.DeepCopy()
+		// まとめて上書き
 		for _, e := range c.Env {
 			if e.Name == env.Name {
 				envFound = true
@@ -74,11 +75,15 @@ func InjectOrReplaceEnv(podSpec *corev1.PodSpec, env *corev1.EnvVar) {
 			}
 			envs = append(envs, e)
 		}
+		// まとめて挿入
 		if !envFound {
 			envs = append(envs, *env.DeepCopy())
 		}
+		// 更新
 		c.Env = envs
+		// コンテナの設定を更新
 		containers = append(containers, c)
 	}
+    // コンテナの設定を保存
 	podSpec.Containers = containers
 }
