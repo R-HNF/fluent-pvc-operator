@@ -53,7 +53,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
-	// 処理対象の PVC と同名の FluentPVCBinding が存在していない場合、処理対象外とする
+	// 処理対象の PVC と同名の FluentPVCBinding が存在していない場合、処理対象外とする（作りたてなど）
 	b := &fluentpvcv1alpha1.FluentPVCBinding{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: pvc.Name}, b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -62,6 +62,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
+	// 同名の FluentPVCBinding が存在するのに、UID が異なる場合、処理対象外とする（何かおかしいがエラーにはしない。無駄にPVCが作られていそう）
 	if pvc.UID != b.Spec.PVC.UID {
 		logger.Info(fmt.Sprintf(
 			"Skip processing because pvc.UID='%s' is different from fluentpvcbinding.Spec.PVC.UID='%s' for name='%s'.",
@@ -82,19 +83,25 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return requeueResult(10 * time.Second), nil
 	}
 
+	// OutOfUse の場合 PVC を使っていない
+	// finalizer job の実行 または 削除
+
 	logger.Info(fmt.Sprintf(
 		"pvc='%s' is finalizing because the status of fluentpvcbinding='%s' is OutOfUse.",
 		pvc.Name, b.Name,
 	))
 
 	// FluentPVCBinding の Condition が FinalizerJobApplied ではない場合、 Finalizer Job を Apply する
+	// ここではもう OutOfUse しかない気がする
 	if !b.IsConditionFinalizerJobApplied() {
 		jobs := &batchv1.JobList{}
 
-		// Finalizer Job が既に Apply されている場合、 FluentPVCBinding の状態更新が遅延しているだけなので処理対象外とする
+		// FlunetPVCBinding を Owner とする Job をあってもなくても取得
 		if err := r.List(ctx, jobs, matchingOwnerControllerField(b.Name)); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
+
+		// Job があれば　FluentPVCBinding の状態更新が遅延しているだけなので処理対象外とする
 		if len(jobs.Items) != 0 {
 			logger.Info(fmt.Sprintf(
 				"fluentpvcbinding='%s' status indicates any finalizer job is not applied, but some jobs are found: %+v",
@@ -103,6 +110,9 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return requeueResult(10 * time.Second), nil
 		}
 
+
+
+		// job がなければ job を作成する
 		// Finalizer Job は Fluent PVC で定義された JobSpec に処理対象の PVC を Mount して Apply する
 		fpvc := &fluentpvcv1alpha1.FluentPVC{}
 		if err := r.Get(ctx, client.ObjectKey{Name: metav1.GetControllerOf(b).Name}, fpvc); err != nil {
@@ -155,6 +165,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
+	// FinalizerJobAppliedなら処理中
 	// FluentPVCBinding の Condition が FinalizerJobApplied ではあるが FinalizerJobSucceeded もしくは FinalizerJobFailed ではない場合、FinalizerJobSucceeded もしくは FinalizerJobFailed となるまで処理対象外とする。
 	if !b.IsConditionFinalizerJobSucceeded() && !b.IsConditionFinalizerJobFailed() {
 		logger.Info(fmt.Sprintf(
@@ -164,6 +175,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return requeueResult(10 * time.Second), nil
 	}
 
+	// jobが失敗だった場合、やり直しを見守る
 	// FluentPVCBinding の Condition が FinalizerJobFailed である場合、処理対象外とする。
 	if b.IsConditionFinalizerJobFailed() {
 		logger.Info(fmt.Sprintf("Skip processing because the finalizer job='%s' is failed.", b.Name))
@@ -176,6 +188,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	logger.Info(fmt.Sprintf("Remove the finalizer='%s' from pvc='%s'", constants.PVCFinalizerName, pvc.Name))
 	controllerutil.RemoveFinalizer(pvc, constants.PVCFinalizerName)
 	if err := r.Update(ctx, pvc); client.IgnoreNotFound(err) != nil {
+		// pvc がコンフリクトしたら見守る
 		if apierrors.IsConflict(err) {
 			// NOTE: Conflict with deleting the pvc in other pvcReconciler#Reconcile.
 			return requeueResult(10 * time.Second), nil
@@ -186,6 +199,7 @@ func (r *pvcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		)
 	}
 
+	// PVC を削除する
 	// Delete the PVC when the finalizer Job is succeeded.
 	logger.Info(fmt.Sprintf("Delete pvc='%s' because it is finalized.", pvc.Name))
 	if err := r.Delete(ctx, pvc, deleteOptionsBackground(&pvc.UID, &pvc.ResourceVersion)); client.IgnoreNotFound(err) != nil {
