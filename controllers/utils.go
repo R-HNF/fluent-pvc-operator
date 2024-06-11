@@ -15,19 +15,15 @@ import (
 	"github.com/st-tech/fluent-pvc-operator/constants"
 )
 
+
+
 func matchingOwnerControllerField(ownerName string) client.MatchingFields {
 	return client.MatchingFields(map[string]string{constants.OwnerControllerField: ownerName})
 }
 
-func deleteOptionsBackground(uid *types.UID, resourceVersion *string) *client.DeleteOptions {
-	return &client.DeleteOptions{
-		Preconditions: &metav1.Preconditions{
-			UID:             uid,
-			ResourceVersion: resourceVersion,
-		},
-		PropagationPolicy: (*metav1.DeletionPropagation)(pointer.StringPtr(string(metav1.DeletePropagationBackground))),
-	}
-}
+
+
+
 
 func indexJobByOwnerFluentPVCBinding(obj client.Object) []string {
 	j := obj.(*batchv1.Job)
@@ -75,6 +71,8 @@ func getFinishedStatus(j *batchv1.Job) (bool, batchv1.JobConditionType) {
 	return false, ""
 }
 
+// job
+
 func isJobSucceeded(j *batchv1.Job) bool {
 	isFinished, t := getFinishedStatus(j)
 	return isFinished && t == batchv1.JobComplete
@@ -84,6 +82,9 @@ func isJobFailed(j *batchv1.Job) bool {
 	isFinished, t := getFinishedStatus(j)
 	return isFinished && t == batchv1.JobFailed
 }
+
+
+// pod controller
 
 func isPodRunningPhase(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodRunning
@@ -97,6 +98,18 @@ func findContainerStatusByName(status *corev1.PodStatus, name string) *corev1.Co
 	}
 	return nil
 }
+
+func deleteOptionsBackground(uid *types.UID, resourceVersion *string) *client.DeleteOptions {
+	return &client.DeleteOptions{
+		Preconditions: &metav1.Preconditions{
+			UID:             uid,
+			ResourceVersion: resourceVersion,
+		},
+		PropagationPolicy: (*metav1.DeletionPropagation)(pointer.StringPtr(string(metav1.DeletePropagationBackground))),
+	}
+}
+
+// fluent pvc binding controller
 
 func isCreatedBefore(obj client.Object, duration time.Duration) bool {
 	threshold := metav1.NewTime(time.Now().Add(-duration))
