@@ -53,6 +53,7 @@ func NewFluentPVCBindingReconciler(mgr ctrl.Manager) *fluentPVCBindingReconciler
 func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("Reconcile")
 
+	// リクエストをオブジェクトに変換
 	b := &fluentpvcv1alpha1.FluentPVCBinding{}
 	if err := r.Get(ctx, req.NamespacedName, b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -61,12 +62,14 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
+	// 対象 FluentPVC の取得
 	fpvc := &fluentpvcv1alpha1.FluentPVC{}
 	if err := r.Get(ctx, client.ObjectKey{Name: b.Spec.FluentPVC.Name}, fpvc); err != nil {
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 
 	// FluentPVCBinding の定義と OwnerReference の関係の整合性が崩れている場合直す。(FluentPVC → FluentPVCBinding)
+	// FluentPVC を誤って削除して再作成した場合?
 	if !b.IsControlledBy(fpvc) {
 		if err := r.updateControllerFluentPVC(ctx, b, fpvc); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred: %w", err)
@@ -81,19 +84,22 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
+	// FluentPVCBinding で定義された PVC の存在確認しつつ、必要あれば登録し直す
 	// FluentPVCBinding に定義された Pod と PVC 及び Job を監視する。
 	// それぞれの状態変化に応じて FluentPVCBinding の状態を更新する。
-	// 各 controller （pod_controller、pvc_controller、fluentpvc_controller(?)）は FluentPVCBinding の状態に応じて処理内容を決定する。
+	// 各 controller （pvc_controller、fluentpvc_controller）は FluentPVCBinding の状態に応じて処理内容を決定する。
 	// FluentPVCBinding で定義された Pod の UID が存在していない場合、FluentPVCBinding で定義された Pod の Name と同一名称の Pod を処理対象として FluentPVCBinding の UID を更新する
 	pod := &corev1.Pod{}
 	podFound := true
 	if filled, err := r.fulfillFluentPVCBindingPod(ctx, b, pod); err != nil {
+		// エラーの場合
 		return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 	} else {
+		// エラーでない場合
 		podFound = filled
 	}
 
-	// FluentPVCBinding で定義された PVC の確認
+	// FluentPVCBinding で定義された PVC の存在確認
 	pvc := &corev1.PersistentVolumeClaim{}
 	pvcFound := true
 	if filled, err := r.fulfillFluentPVCBindingPVC(ctx, b, pvc); err != nil {
@@ -101,8 +107,8 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	} else {
 		pvcFound = filled
 	}
-
-	// PVC が Lost status の場合 FluentPVCBinding の Condition は Unknown となる
+	// PVC は登録されているが PV を失った PVC だった場合
+	// FluentPVCBinding の Condition を Unknown  にする
 	if pvcFound && pvc.Status.Phase == corev1.ClaimLost {
 		if err := r.updateConditionUnknownPVCLost(ctx, b); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
@@ -118,6 +124,8 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			logger.Info(fmt.Sprintf("Skip processing because the finalizer of fluentpvcbinding='%s' is not removed.", b.Name))
 			return ctrl.Result{}, nil
 		}
+		// PVC は存在しているけど、PVC の finalizer が削除されている場合
+		// PVC は存在していない場合
 		if err := r.deleteFluentPVCBinding(ctx, b); err != nil {
 			return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
@@ -125,6 +133,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// FluentPVCBinding に定義された Pod が一度も見つかっていない場合見つかるまで処理対象外とする。
+	// pod が見つからなくて、FluentPVCBinding の Condition が Ready になっていない場合、待機
 	if !podFound && !b.IsConditionReady() {
 		// ただし、1時間以上 Pod が見つからない場合 FluentPVCBinding の Condition は Unknown となる
 		if isCreatedBefore(b, 1*time.Hour) { // TODO: make it configurable?
@@ -161,6 +170,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// FluentPVCBinding に定義された Pod のみが存在する場合 FluentPVCBinding の Condition は Unknown となる
 		switch pod.Status.Phase {
 		case corev1.PodPending, corev1.PodUnknown:
+			// 何もしない
 			logger.Info(fmt.Sprintf(
 				"Skip processing because pod='%s'(UID='%s') is '%s' phase and pvc='%s'(UID='%s') is not found",
 				b.Spec.Pod.Name, b.Spec.Pod.UID, pod.Status.Phase, b.Spec.PVC.Name, b.Spec.PVC.UID,
@@ -185,6 +195,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		switch pod.Status.Phase {
 		case corev1.PodPending, corev1.PodRunning, corev1.PodUnknown:
+			// 何もしない
 			logger.Info(fmt.Sprintf(
 				"Skip processing because pod='%s'(UID='%s') is '%s' phase and pvc='%s'(UID='%s') is found",
 				b.Spec.Pod.Name, b.Spec.Pod.UID, pod.Status.Phase, b.Spec.PVC.Name, b.Spec.PVC.UID,
@@ -208,9 +219,23 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 
-// FluentPVCBinding で定義された Pod の UID が存在していない場合、FluentPVCBinding で定義された Pod の Name と同一名称の Pod を処理対象として FluentPVCBinding の UID を更新する
+//
+
+
+func (r *fluentPVCBindingReconciler) updateControllerFluentPVC(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, fpvc *fluentpvcv1alpha1.FluentPVC) error {
+	if err := ctrl.SetControllerReference(fpvc, b, r.Scheme); err != nil {
+		return xerrors.Errorf("Unexpected error occurred: %w", err)
+	}
+	b.SetFluentPVC(fpvc)
+	if err := r.Update(ctx, b); err != nil {
+		return xerrors.Errorf("Unexpected error occurred.: %w", err)
+	}
+	return nil
+}
+
 func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pod *corev1.Pod) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("fulfillFluentPVCBindingPod")
+
 	podFound := true
 	if b.Spec.Pod.Name == "" {
 		// NOTE: Pods created by Deployments don't have the Name when the webhook is invoked,
@@ -225,21 +250,28 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Cont
 			return false, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 		if len(pods.Items) == 0 {
+			// 見つからない場合は podFound を false にしておく
 			podFound = false
 		} else if len(pods.Items) != 1 {
+			// 1つ以上ある場合おかしいのでエラーを返す
 			return false, xerrors.New(fmt.Sprintf("Illegal number of pods(n=%d) is found.", len(pods.Items)))
 		} else {
+			// 見つかった場合はその1つを pod にコピー
 			pods.Items[0].DeepCopyInto(pod)
 		}
 	} else {
+		// FluentPVCBindingに登録されている名前で pod を検索して取得
 		if err := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pod.Name}, pod); err != nil {
 			if apierrors.IsNotFound(err) {
+				// 見つからない場合は podFound を false にしておく
 				podFound = false
 			} else {
 				return false, xerrors.Errorf("Unexpected error occurred.: %w", err)
 			}
 		}
 	}
+
+	// pod を見つけて、FluentPVCBinding の UID または Name が空の場合、FluentPVCBinding に pod を登録し直す
 	if podFound && (b.Spec.Pod.UID == "" || b.Spec.Pod.Name == "") {
 		// NOTE: When the pod_webhook is invoked, the pod does not have a UID, so it is an empty string.
 		//       Therefore, the first pod that is found with an empty UID is considered to be the target.
@@ -249,6 +281,11 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Cont
 		// NOTE: Wait until next #Reconcile to avoid update confliction.
 		return true, nil
 	}
+
+	// pod が見つかっていない場合はスルーになる気がする
+
+	// pod を見つけたが、FluentPVCBinding の UID と Name が両方埋まっている場合
+	// 見つけた pod の UID と、登録されている UID が異なる場合、podFound を false にしておく
 	if !b.IsBindingPod(pod) {
 		logger.Info(fmt.Sprintf("pod.UID='%s' is different from the binding pod.UID='%s' for name='%s'.", pod.UID, b.Spec.Pod.UID, b.Name))
 		podFound = false
@@ -256,17 +293,59 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPod(ctx context.Cont
 	return podFound, nil
 }
 
+func (r *fluentPVCBindingReconciler) fillPodUID(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pod *corev1.Pod) error {
+	// PVC の確認
+	podHasPVC := false
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == b.Spec.PVC.Name {
+			podHasPVC = true
+		}
+	}
+	// PVC が見つからない場合はエラーを返す
+	if !podHasPVC {
+		return xerrors.New(fmt.Sprintf(
+			"There is an inconsistency in the definition of fluentpvcbinding='%s' because pod='%s' does not have pvc='%s'.",
+			b.Name, pod.Name, b.Spec.PVC.Name,
+		))
+	}
+
+	// FluentPVCラベルの確認
+	podHasFluentPVCLabel := false
+	if v, ok := pod.Labels[constants.PodLabelFluentPVCName]; ok {
+		podHasFluentPVCLabel = v == b.Spec.FluentPVC.Name
+	}
+	// FluentPVCラベルが見つからない場合はエラーを返す
+	if !podHasFluentPVCLabel {
+		return xerrors.New(fmt.Sprintf(
+			"There is an inconsistency in the definition of fluentpvcbinding='%s' because pod='%s' does not have fluentpvc='%s'",
+			b.Name, pod.Name, b.Spec.FluentPVC.Name,
+		))
+	}
+
+	b.SetPod(pod)
+	if err := r.Update(ctx, b); err != nil {
+		return xerrors.Errorf("Unexpected error occurred.: %w", err)
+	}
+	return nil
+}
+
 
 func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPVC(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pvc *corev1.PersistentVolumeClaim) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("fulfillFluentPVCBindingPVC")
+
 	pvcFound := true
 	if err := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.PVC.Name}, pvc); err != nil {
 		if apierrors.IsNotFound(err) {
+			// 見つからない場合は pvcFound を false にしておく
 			pvcFound = false
 		} else {
 			return false, xerrors.Errorf("Unexpected error occurred.: %w", err)
 		}
 	}
+
+	// pvc が見つかっていない場合はスルーになる気がする
+
+	// 見つけた pvc の UID と、登録されている UID が異なる場合、pvcFound を false にしておく
 	if !b.IsBindingPVC(pvc) {
 		logger.Info(fmt.Sprintf("pvc.UID='%s' is different from the binding pvc.UID='%s' for name='%s'.", pvc.UID, b.Spec.PVC.UID, b.Name))
 		pvcFound = false
@@ -275,48 +354,7 @@ func (r *fluentPVCBindingReconciler) fulfillFluentPVCBindingPVC(ctx context.Cont
 }
 
 
-// FluentPVCBinding の定義と OwnerReference の関係の整合性が崩れている場合直す。(FluentPVC → FluentPVCBinding)
-func (r *fluentPVCBindingReconciler) updateControllerFluentPVC(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, fpvc *fluentpvcv1alpha1.FluentPVC) error {
-	if err := ctrl.SetControllerReference(fpvc, b, r.Scheme); err != nil {
-		return xerrors.Errorf("Unexpected error occurred: %w", err)
-	}
-	b.SetFluentPVC(fpvc)
-	if err := r.Update(ctx, b); err != nil {
-		return xerrors.Errorf("Unexpected error occurred.: %w", err)
-	}
-	return nil
-}
 
-
-func (r *fluentPVCBindingReconciler) fillPodUID(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, pod *corev1.Pod) error {
-	podHasPVC := false
-	for _, v := range pod.Spec.Volumes {
-		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == b.Spec.PVC.Name {
-			podHasPVC = true
-		}
-	}
-	if !podHasPVC {
-		return xerrors.New(fmt.Sprintf(
-			"There is an inconsistency in the definition of fluentpvcbinding='%s' because pod='%s' does not have pvc='%s'.",
-			b.Name, pod.Name, b.Spec.PVC.Name,
-		))
-	}
-	podHasFluentPVCLabel := false
-	if v, ok := pod.Labels[constants.PodLabelFluentPVCName]; ok {
-		podHasFluentPVCLabel = v == b.Spec.FluentPVC.Name
-	}
-	if !podHasFluentPVCLabel {
-		return xerrors.New(fmt.Sprintf(
-			"There is an inconsistency in the definition of fluentpvcbinding='%s' because pod='%s' does not have fluentpvc='%s'",
-			b.Name, pod.Name, b.Spec.FluentPVC.Name,
-		))
-	}
-	b.SetPod(pod)
-	if err := r.Update(ctx, b); err != nil {
-		return xerrors.Errorf("Unexpected error occurred.: %w", err)
-	}
-	return nil
-}
 
 
 // FluentPVCBinding の Condition が FinalizerJobSucceded である場合、
@@ -383,13 +421,17 @@ func (r *fluentPVCBindingReconciler) updateConditionUnknownPodCompletedPVCNotFou
 
 func (r *fluentPVCBindingReconciler) updateConditionUnknown(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("updateConditionUnknown")
+
 	logger.Error(xerrors.New(message), message)
+
 	b.SetConditionUnknown(reason, message)
 	if err := r.Status().Update(ctx, b); err != nil {
 		return xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
 	return nil
 }
+
+
 
 
 func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodDeletedPVCFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
@@ -413,6 +455,8 @@ func (r *fluentPVCBindingReconciler) updateConditionOutOfUsePodCompletedPVCFound
 func (r *fluentPVCBindingReconciler) updateConditionOutOfUse(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding, reason, message string) error {
 	return r.updateCondition(ctx, b, reason, message, b.SetConditionOutOfUse)
 }
+
+
 
 
 func (r *fluentPVCBindingReconciler) updateConditionReadyPodFoundPVCFound(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
@@ -442,23 +486,31 @@ func (r *fluentPVCBindingReconciler) updateCondition(ctx context.Context, b *flu
 
 func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx context.Context, b *fluentpvcv1alpha1.FluentPVCBinding) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("fluentPVCBindingReconciler").WithName("updateConditionByFinalizerJobStatus")
+
 	logger.Info(fmt.Sprintf("Check the finalizer jobs for fluentpvcbinding='%s'.", b.Name))
+
 	jobs := &batchv1.JobList{}
 	if err := r.List(ctx, jobs, matchingOwnerControllerField(b.Name)); client.IgnoreNotFound(err) != nil {
 		return xerrors.Errorf("Unexpected error occurred.: %w", err)
 	}
+
+	// Finalizer Job が見つからない場合、見つかるまで待ち続ける
+	// job が一瞬でなくなったら、ここで詰まりそう
 	if len(jobs.Items) == 0 {
-		// Finalizer Job が見つからない場合、見つかるまで待ち続ける
 		reason := "FinalizerJobNotFound"
 		message := fmt.Sprintf("Finalizer jobs for fluentpvcbinding='%s' is not found.", b.Name)
 		needUpdate := false
 
-		// Finalizer Job が見つかった場合、FluentPVCBinding の Condition は FinalizerJobApplied となる
+
+		// FinalizerJobAppliedが有効の場合
 		if b.IsConditionFinalizerJobApplied() {
+			// Not で更新
 			b.SetConditionNotFinalizerJobApplied(reason, message)
 			needUpdate = true
 		}
+		// FinalizerJobFailed が有効の場合
 		if b.IsConditionFinalizerJobFailed() {
+			// Not で更新
 			b.SetConditionNotFinalizerJobFailed(reason, message)
 			needUpdate = true
 		}
@@ -470,6 +522,9 @@ func (r *fluentPVCBindingReconciler) updateConditionByFinalizerJobStatus(ctx con
 		logger.Info(fmt.Sprintf("Wait for applying some finalizer jobs for fluentpvcbinding='%s'", b.Name))
 		return nil
 	}
+
+	// Finalizer Job が見つかった場合、FluentPVCBinding の Condition は FinalizerJobApplied となる
+	// job が複数ある場合、Unknown にする
 	if len(jobs.Items) != 1 {
 		reason := "MultipleFinalizerJobsFound"
 		var jobNames []string
