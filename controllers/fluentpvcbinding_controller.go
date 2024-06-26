@@ -115,7 +115,7 @@ func (r *fluentPVCBindingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if !podFound && !b.IsConditionReady() {
-		if isCreatedBefore(b, 1*time.Hour) { // TODO: make it configurable?
+		if isCreatedBefore(b, 1*time.Minute) { // TODO: make it configurable?
 			if err := r.updateConditionPodMissingBindingPodTimeout(ctx, b); err != nil {
 				return ctrl.Result{}, xerrors.Errorf("Unexpected error occurred.: %w", err)
 			}

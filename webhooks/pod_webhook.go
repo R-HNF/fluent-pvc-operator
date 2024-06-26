@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -168,6 +169,7 @@ func (m *podMutator) Handle(ctx context.Context, req admission.Request) admissio
 		"Patch Pod='%s'(namespace='%s', generatorName='%s') with PVC='%s' and FluentPVCBinding='%s' by FluentPVC='%s'.",
 		podPatched.Name, req.Namespace, podPatched.GenerateName, pvc.Name, b.Name, fpvc.Name,
 	))
+	time.Sleep(11 * time.Second)
 	return PodAdmissionResponse(podPatched, req)
 }
 
